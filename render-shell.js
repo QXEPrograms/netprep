@@ -180,26 +180,27 @@ function renderDashboard(){
       <div class="topbar-actions"><button class="icon-btn" data-nav="settings" title="Settings">${iconSvg('settings')}</button></div>
     </div>
     ${weekBannerHtml()}
-    ${statsHtml}
     ${weakHtml}
     ${mistakeHtml}
-    <div class="panel">
-      <div class="panel-head"><h2>Mastery over time</h2><span class="hint">Last ${Math.min(allAttemptsChronological().length,12)} quiz attempts</span></div>
-      <div id="chartHost"></div>
-    </div>
     <div class="panel">
       <div class="panel-head"><h2>Sections</h2><span class="hint">Locked in order &mdash; pass at ${Math.round(PASS_THRESHOLD*100)}% to unlock the next</span></div>
       <div class="section-rows">${rows}</div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><h2>Milestones</h2><span class="hint">${Object.keys(STATE.badges).length} / ${BADGES.length} earned</span></div>
-      <div class="badge-grid">${BADGES.map(b => `
-        <div class="badge-chip ${STATE.badges[b.id]?'earned':'locked'}">
-          <span class="badge-chip-icon">${iconSvg(b.icon)}</span>
-          <div><div class="badge-chip-title">${b.title}</div><div class="badge-chip-desc">${b.desc}</div></div>
-        </div>
-      `).join('')}</div>
-    </div>
+    <details class="panel disclosure">
+      <summary>Your stats, mastery trend &amp; milestones ${iconSvg('chevron')}</summary>
+      <div class="disclosure-body">
+        ${statsHtml}
+        <div class="panel-head" style="margin-top:20px;"><h2>Mastery over time</h2><span class="hint">Last ${Math.min(allAttemptsChronological().length,12)} quiz attempts</span></div>
+        <div id="chartHost"></div>
+        <div class="panel-head" style="margin-top:20px;"><h2>Milestones</h2><span class="hint">${Object.keys(STATE.badges).length} / ${BADGES.length} earned</span></div>
+        <div class="badge-grid">${BADGES.map(b => `
+          <div class="badge-chip ${STATE.badges[b.id]?'earned':'locked'}">
+            <span class="badge-chip-icon">${iconSvg(b.icon)}</span>
+            <div><div class="badge-chip-title">${b.title}</div><div class="badge-chip-desc">${b.desc}</div></div>
+          </div>
+        `).join('')}</div>
+      </div>
+    </details>
   `;
   main.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => location.hash = '#/' + el.getAttribute('data-nav')));
   renderMasteryChart(document.getElementById('chartHost'));

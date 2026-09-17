@@ -13,10 +13,23 @@
   --font-mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace;
   color-scheme: dark;
 }
+:root[data-reading="on"]{ --font-body:'Lexend','Inter',system-ui,sans-serif; }
 *{box-sizing:border-box;}
 body{
   background:var(--bg); color:var(--text); font-family:var(--font-body);
   font-size:16px; line-height:1.55; padding:0 16px;
+}
+/* ---- Reading text: constrained line length for easier line-tracking ---- */
+.lesson-card > p, .lesson-card > ul, .lesson-card > ol,
+.explain-box p, .callout-sub{ max-width:70ch; }
+/* ---- Reading Mode: wider line height, extra letter-spacing, bigger body text ---- */
+:root[data-reading="on"] .lesson-card p, :root[data-reading="on"] .lesson-card li,
+:root[data-reading="on"] .q-prompt, :root[data-reading="on"] .explain-box p,
+:root[data-reading="on"] .miss-item p{
+  line-height:1.95; letter-spacing:.01em; font-size:17px;
+}
+:root[data-reading="on"] .lesson-card > p, :root[data-reading="on"] .lesson-card > ul, :root[data-reading="on"] .lesson-card > ol{
+  margin-bottom:1.15em;
 }
 body::before{
   content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
@@ -104,6 +117,19 @@ button{font-family:inherit; cursor:pointer;}
 .panel-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px; flex-wrap:wrap;}
 .panel-head h2{font-size:15px;}
 .panel-head .hint{font-size:12px; color:var(--text-faint);}
+
+/* ---- Dashboard disclosure (collapsed by default to cut down first-screen clutter) ---- */
+.disclosure summary{
+  list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px;
+  font-family:var(--font-display); font-weight:600; font-size:14px; color:var(--text);
+}
+.disclosure summary::-webkit-details-marker{display:none;}
+.disclosure summary svg{width:14px; height:14px; color:var(--text-faint); transition:transform .15s ease;}
+.disclosure[open] summary svg{transform:rotate(90deg);}
+.disclosure-body{margin-top:18px;}
+@media (prefers-reduced-motion:reduce){
+  .disclosure summary svg{transition:none;}
+}
 
 /* ---- Chart ---- */
 .chart-wrap{position:relative;}

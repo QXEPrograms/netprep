@@ -47,6 +47,12 @@ function renderSettings(){
     <div class="topbar"><div><h1>Settings</h1><div class="topbar-sub">Progress is saved in this browser only.</div></div></div>
     <div class="panel">
       <div class="field-row">
+        <div><div class="field-label">Easier reading mode</div><div class="field-sub">Switches lesson text to Lexend (a font built for reading speed), widens line spacing, and shortens line length &mdash; built for dyslexia/ADHD-friendly reading</div></div>
+        <span class="switch ${STATE.settings.readingMode?'on':''}" id="settingsReadingSwitch" style="cursor:pointer;"><i></i></span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="field-row">
         <div><div class="field-label">Districts competition date</div><div class="field-sub">Powers the countdown on your dashboard</div></div>
         <input type="date" id="compDate" value="${STATE.competitionDate || ''}"/>
       </div>
@@ -70,6 +76,11 @@ function renderSettings(){
       </div>
     </div>
   `;
+  document.getElementById('settingsReadingSwitch').addEventListener('click', (e) => {
+    STATE.settings.readingMode = !STATE.settings.readingMode; saveState();
+    applyReadingMode();
+    e.currentTarget.classList.toggle('on', STATE.settings.readingMode);
+  });
   document.getElementById('compDate').addEventListener('change', (e) => {
     STATE.competitionDate = e.target.value || null; saveState();
   });

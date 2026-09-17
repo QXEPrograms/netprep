@@ -25,7 +25,7 @@ window.SECTION_BASICS = {
       title: 'OSI model, all 7 layers and their functions',
       image: 'osi-stack',
       body: `
-        <p>Sending information across a network is like a 7-step relay race. The OSI model names each step. A fun way to remember them, from the bottom up, is: <em>"Please Do Not Throw Sausage Pizza Away."</em></p>
+        <p>Sending information across a network is like a 7-step relay race. The OSI model names each step. A fun way to remember them, from the bottom up, is: <strong>"Please Do Not Throw Sausage Pizza Away."</strong></p>
         <ol>
           <li><strong>1 Physical:</strong> the actual wires, cables, or Wi-Fi signal carrying the 1s and 0s.</li>
           <li><strong>2 Data Link:</strong> sends information between two nearby devices; this is where switches work.</li>

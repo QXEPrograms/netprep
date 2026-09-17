@@ -62,6 +62,7 @@ function renderShellAndView(activeRoute, viewFn){
 
 window.addEventListener('hashchange', router);
 window.addEventListener('DOMContentLoaded', () => {
+  applyReadingMode();
   touchStreak();
   if(!location.hash && STATE.lastRoute){
     location.hash = '#/' + STATE.lastRoute; // triggers hashchange -> router()

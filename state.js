@@ -29,7 +29,7 @@ function defaultState(){
     badges: {},
     lastRoute: null,
     flashcardsKnown: [],
-    settings: { timedMode: false },
+    settings: { timedMode: false, readingMode: false },
   };
 }
 
@@ -66,6 +66,7 @@ function loadState(){
 }
 
 let STATE = loadState();
+applyReadingMode();
 
 function saveState(){
   try{ localStorage.setItem(STORE_KEY, JSON.stringify(STATE)); }catch(e){ /* private mode / storage blocked: continue in-memory */ }
@@ -267,4 +268,9 @@ function upcomingMistakeQuestions(){
 function resetAllProgress(){
   STATE = defaultState();
   saveState();
+  applyReadingMode();
+}
+
+function applyReadingMode(){
+  try{ document.documentElement.setAttribute('data-reading', STATE.settings.readingMode ? 'on' : 'off'); }catch(e){ /* ignore */ }
 }
