@@ -20,7 +20,7 @@ function startQuiz(sectionId, isMistakeMode){
   quizSession = {
     sectionId, isMistakeMode, questions, index: 0, answers: [],
     timed: STATE.settings.timedMode, timeLeft: QUESTION_SECONDS, timerId: null,
-    currentConfidence: null, locked: false,
+    currentConfidence: null, locked: false, flagged: new Set(),
   };
   location.hash = isMistakeMode ? '#/quiz/mistakes' : `#/quiz/${sectionId}`;
   renderQuiz();
@@ -58,12 +58,15 @@ function renderQuiz(){
       </div>
       <div class="topbar-actions">
         ${qs.timed ? `<span class="timer-chip tabnum" id="timerChip">${QUESTION_SECONDS}s</span>` : ''}
-        <span class="hint tabnum">Question ${qs.index+1} of ${total}</span>
+        <span class="hint tabnum">Question ${qs.index+1} of ${total}${qs.flagged.size ? ` &middot; ${qs.flagged.size} flagged` : ''}</span>
       </div>
     </div>
     <div class="quiz-progress-bar"><i style="width:${Math.round((qs.index/total)*100)}%"></i></div>
     <div class="panel">
-      ${q.scenario ? '<span class="badge muted" style="margin-bottom:10px; display:inline-block;">Scenario</span>' : ''}
+      <div class="quiz-head">
+        ${q.scenario ? '<span class="badge muted">Scenario</span>' : '<span></span>'}
+        <button class="btn sm flag-toggle-btn ${qs.flagged.has(q.id)?'active':''}" id="flagBtn">${iconSvg('flag')} ${qs.flagged.has(q.id) ? 'Flagged' : 'Flag for review'}</button>
+      </div>
       <div class="q-prompt">${q.prompt}</div>
       <div class="confidence-row" id="confRow">${confHtml}</div>
       <div class="choice-list" id="choiceList">${choicesHtml}</div>
@@ -74,6 +77,17 @@ function renderQuiz(){
 
   document.getElementById('exitQuizBtn').addEventListener('click', () => {
     clearTimer(); quizSession = null; location.hash = '#/dashboard';
+  });
+
+  document.getElementById('flagBtn').addEventListener('click', (e) => {
+    if(qs.flagged.has(q.id)) qs.flagged.delete(q.id);
+    else qs.flagged.add(q.id);
+    const btn = e.currentTarget;
+    const isFlagged = qs.flagged.has(q.id);
+    btn.classList.toggle('active', isFlagged);
+    btn.innerHTML = `${iconSvg('flag')} ${isFlagged ? 'Flagged' : 'Flag for review'}`;
+    const hint = main.querySelector('.topbar-actions .hint');
+    if(hint) hint.innerHTML = `Question ${qs.index+1} of ${total}${qs.flagged.size ? ` &middot; ${qs.flagged.size} flagged` : ''}`;
   });
 
   main.querySelectorAll('[data-conf]').forEach(btn => {
@@ -159,6 +173,7 @@ function renderResults(qs, attempt, newBadges){
   const passed = attempt.passed;
   const missed = qs.answers.map((a,i) => Object.assign({}, a, { question: qs.questions[i] })).filter(a => !a.correct);
   const overconfidentMisses = missed.filter(a => a.confidence === 2).length;
+  const flagged = qs.answers.map((a,i) => Object.assign({}, a, { question: qs.questions[i] })).filter(a => qs.flagged.has(a.qId));
 
   const badgeToastHtml = (newBadges && newBadges.length) ? `
     <div class="panel" style="border-color:rgba(251,191,36,.4); background:var(--warning-soft);">
@@ -195,6 +210,25 @@ function renderResults(qs, attempt, newBadges){
     </div>
   `).join('') : `<div class="empty-state" style="padding:24px;">${iconSvg('check')}<div>No missed questions &mdash; clean sweep.</div></div>`;
 
+  const flaggedListHtml = flagged.length ? flagged.map(m => `
+    <div class="miss-item">
+      <div class="miss-meta">
+        <span class="badge warn">${iconSvg('flag')} Flagged</span>
+        <span class="badge ${m.correct?'muted':'danger'}">${m.correct ? 'Answered correctly' : 'Missed'}</span>
+      </div>
+      <div class="miss-q">${m.question.prompt}</div>
+      <p style="margin-bottom:10px;">${m.question.explanation}</p>
+      <button class="btn sm" data-review="${m.question.sectionId || qs.sectionId}::${m.question.objectiveId}">${iconSvg('book')} Review in lesson</button>
+    </div>
+  `).join('') : '';
+
+  const flaggedPanelHtml = flagged.length ? `
+    <div class="panel">
+      <div class="panel-head"><h2>${iconSvg('flag')} Flagged for review</h2><span class="hint">${flagged.length} question${flagged.length===1?'':'s'}</span></div>
+      <div class="miss-list">${flaggedListHtml}</div>
+    </div>
+  ` : '';
+
   const nextIdx = SECTIONS.findIndex(s=>s.id===qs.sectionId) + 1;
   const nextSection = SECTIONS[nextIdx];
 
@@ -211,6 +245,7 @@ function renderResults(qs, attempt, newBadges){
         ${(!qs.isMistakeMode && passed && nextSection) ? `<button class="btn primary" id="nextSecBtn">Next section ${iconSvg('chevron')}</button>` : ''}
       </div>
     </div>
+    ${flaggedPanelHtml}
     <div class="panel">
       <div class="panel-head"><h2>Missed questions</h2><span class="hint">${missed.length} of ${attempt.total}</span></div>
       <div class="miss-list">${missListHtml}</div>

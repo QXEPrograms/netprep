@@ -318,6 +318,7 @@ input[type=range]::-moz-range-thumb{width:16px; height:16px; border-radius:50%; 
 
 /* ---- Quiz ---- */
 .quiz-head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:14px;}
+.flag-toggle-btn.active{background:var(--warning-soft); border-color:rgba(251,191,36,.4); color:var(--warning);}
 .quiz-progress-bar{height:6px; border-radius:3px; background:rgba(255,255,255,.07); overflow:hidden; margin-bottom:20px;}
 .quiz-progress-bar i{display:block; height:100%; background:linear-gradient(90deg,var(--primary),var(--accent)); border-radius:3px;}
 .timer-chip{font-family:var(--font-mono); font-size:12.5px; padding:4px 10px; border-radius:99px; background:var(--surface); border:1px solid var(--border); color:var(--text-muted);}
