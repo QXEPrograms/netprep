@@ -56,7 +56,8 @@ window.SECTION_HARDWARE = {
           <li><strong>Single-mode fiber:</strong> a super thin strand carrying one beam of light &mdash; used for really long distances, like between cities.</li>
           <li><strong>Multi-mode fiber:</strong> a wider strand carrying several light paths at once &mdash; cheaper, but only good for shorter distances, like inside one building.</li>
         </ul>
-        <p><strong>Remember this:</strong> single-mode = long distance. Multi-mode = shorter distance, cheaper.</p>
+        <p>Fiber cables plug in with different connector shapes. The two you'll see most: <strong>SC</strong> (a square connector that clicks straight in) and <strong>LC</strong> (a smaller version of the same idea, common in datacenters because more of them fit in the same space). An older round, twist-to-lock connector called <strong>ST</strong> still shows up occasionally too.</p>
+        <p><strong>Remember this:</strong> single-mode = long distance. Multi-mode = shorter distance, cheaper. LC is the small, space-saving connector.</p>
       `,
       diagram: null,
     },
@@ -183,6 +184,27 @@ window.SECTION_HARDWARE = {
       choices: ['RAID 0', 'RAID 1', 'RAID 5', 'RAID 10'],
       answer: 0,
       explanation: 'RAID 0 stripes data across drives purely for speed, with no redundancy &mdash; one drive failing loses everything.'
+    },
+    {
+      id: 'hw-q13', objectiveId: 'hw-fiber', scenario: false,
+      prompt: 'A technician needs the smallest, most space-efficient fiber connector commonly used in a datacenter with high port density. Which connector fits?',
+      choices: ['SC', 'LC', 'ST', 'RJ45'],
+      answer: 1,
+      explanation: 'LC connectors are smaller than SC or the older bayonet-style ST connectors, letting datacenters pack more ports into the same panel space. RJ45 is a copper Ethernet connector, not fiber.'
+    },
+    {
+      id: 'hw-q14', objectiveId: 'hw-servers', scenario: true,
+      prompt: 'A company chose blade servers to maximize density in their datacenter. What is the main risk they accepted in exchange?',
+      choices: ['Blade servers cannot be virtualized', 'A failure in the shared chassis (power/cooling) can affect every blade at once', 'Blade servers use more rack space than standalone servers', 'Blade servers cannot connect to a network'],
+      answer: 1,
+      explanation: 'Because blades share one chassis for power, cooling, and networking, a problem with that shared infrastructure is a bigger single point of failure than with standalone rack servers &mdash; the tradeoff for higher density.'
+    },
+    {
+      id: 'hw-q15', objectiveId: 'hw-adapters', scenario: true,
+      prompt: 'A desktop\'s built-in network adapter only supports Gigabit Ethernet, but a video editor needs a faster wired connection for large file transfers. What is the most direct fix?',
+      choices: ['Install a faster PCIe network adapter', 'Replace the router with a newer model', 'Switch the computer to Wi-Fi instead', 'Install a virtual NIC'],
+      answer: 0,
+      explanation: 'A PCIe network adapter is a physical expansion card that gives a desktop a faster (or additional) wired connection than its built-in NIC provides &mdash; the standard fix when onboard networking is the bottleneck.'
     },
   ],
 };

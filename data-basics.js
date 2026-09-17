@@ -78,6 +78,8 @@ window.SECTION_BASICS = {
         </ul>
         <p><strong>Subnetting</strong> means splitting one big network into smaller groups, kind of like splitting a huge school into separate classrooms. It keeps things organized and makes each group safer.</p>
         <p><strong>Remember this:</strong> businesses split their network into smaller pieces mostly to stay organized and secure &mdash; not just because they have more computers.</p>
+        <p><strong>Finding the network address (the fast way):</strong> take the one number in the subnet mask that isn't 255 or 0, and subtract it from 256. That's your "block size" &mdash; addresses count up in jumps of that size. Example: mask <code>255.255.255.192</code> &rarr; 256 &minus; 192 = 64, so blocks are 0, 64, 128, 192. An IP ending in <code>.50</code> falls in the 0&ndash;63 block, so the network address ends in <code>.0</code>. The broadcast address is always one less than where the next block starts &mdash; here, that's <code>.63</code>.</p>
+        <p>This is exactly what the <strong>Subnet Calculator</strong> tool in this app does for you &mdash; type in any IP and mask and it shows the network address, broadcast address, and a color-coded picture of which bits are which. Practice with it until the pattern clicks.</p>
       `,
       diagram: null,
     },
@@ -105,9 +107,9 @@ window.SECTION_BASICS = {
     {
       id: 'basics-q2', objectiveId: 'basics-lan-types', scenario: true,
       prompt: 'A company with 2,000 employees across five departments needs strict traffic separation between departments and centralized policy control. Which LAN type &mdash; and why?',
-      choices: ['SOHO, because it is simplest', 'Enterprise, because dedicated switches/routers/firewalls support segmentation and policy at scale', 'Datacenter, because it has the most bandwidth', 'None &mdash; LAN type does not affect this'],
+      choices: ['SOHO, because an all-in-one router is easiest to manage centrally', 'Enterprise, because dedicated switches/routers/firewalls support segmentation and policy at scale', 'Datacenter, because it offers the most redundancy for critical systems', 'MAN, because it spans the most physical distance'],
       answer: 1,
-      explanation: 'Enterprise networks use dedicated hardware and VLAN segmentation specifically to give large organizations that kind of departmental separation and centralized control.'
+      explanation: 'Enterprise networks use dedicated hardware and VLAN segmentation specifically to give large organizations that kind of departmental separation and centralized control. A datacenter LAN is built for server-to-server traffic, not user/department policy, and a MAN describes geographic scope, not this scenario.'
     },
     {
       id: 'basics-q3', objectiveId: 'basics-osi', scenario: false,
@@ -140,9 +142,9 @@ window.SECTION_BASICS = {
     {
       id: 'basics-q7', objectiveId: 'basics-data-travel', scenario: false,
       prompt: 'Why is data broken into packets instead of sent as one continuous stream?',
-      choices: ['It is required by all cabling standards', 'Packets can be routed independently, retransmitted individually if lost, and share the medium with other traffic', 'It makes data unreadable to other devices for security', 'It reduces the number of devices needed on a network'],
+      choices: ['Packets encrypt the data automatically as a security measure', 'Packets can be routed independently, retransmitted individually if lost, and share the medium with other traffic', 'Packets remove the need for MAC addresses on the local network', 'Packets guarantee a fixed transfer speed regardless of network load'],
       answer: 1,
-      explanation: 'Packetization allows independent routing, efficient sharing of the link, and recovery of only the lost pieces rather than the whole transmission.'
+      explanation: 'Packetization allows independent routing, efficient sharing of the link, and recovery of only the lost pieces rather than the whole transmission. It has nothing to do with encryption, MAC addressing, or guaranteeing speed.'
     },
     {
       id: 'basics-q8', objectiveId: 'basics-internet-access', scenario: false,
@@ -185,6 +187,48 @@ window.SECTION_BASICS = {
       choices: ['Class A', 'Class B', 'Class C', 'Class D'],
       answer: 2,
       explanation: 'Class C spans 192.0.0.0&ndash;223.255.255.255 and is the most common class for small LANs.'
+    },
+    {
+      id: 'basics-q14', objectiveId: 'basics-addressing', scenario: false,
+      prompt: 'A host has the IP address 192.168.10.50 with a subnet mask of 255.255.255.192 (/26). What is the network address?',
+      choices: ['192.168.10.0', '192.168.10.32', '192.168.10.64', '192.168.10.192'],
+      answer: 0,
+      explanation: 'A /26 mask creates blocks of 64 addresses in the last octet (0, 64, 128, 192). 50 falls in the first block, so the network address is 192.168.10.0.'
+    },
+    {
+      id: 'basics-q15', objectiveId: 'basics-addressing', scenario: false,
+      prompt: 'How many usable host addresses are available on a /27 subnet?',
+      choices: ['14', '30', '32', '62'],
+      answer: 1,
+      explanation: 'A /27 leaves 5 host bits, for 2^5 = 32 total addresses. Subtract 2 (network and broadcast) for 30 usable hosts. 14 is a /28, and 62 is a /26.'
+    },
+    {
+      id: 'basics-q16', objectiveId: 'basics-addressing', scenario: false,
+      prompt: 'What is the broadcast address for the network 10.0.4.0/22?',
+      choices: ['10.0.4.255', '10.0.5.255', '10.0.7.255', '10.0.255.255'],
+      answer: 2,
+      explanation: 'A /22 mask creates blocks of 4 in the third octet (0, 4, 8, 12...). The 10.0.4.0 block runs through 10.0.7.255 before the next block (10.0.8.0) begins, so 10.0.7.255 is the broadcast address.'
+    },
+    {
+      id: 'basics-q17', objectiveId: 'basics-addressing', scenario: false,
+      prompt: 'A host has the IP address 172.16.130.15 with a /18 subnet mask. What is the network address?',
+      choices: ['172.16.0.0', '172.16.128.0', '172.16.130.0', '172.16.192.0'],
+      answer: 1,
+      explanation: 'A /18 mask creates blocks of 64 in the third octet (0, 64, 128, 192). 130 falls in the 128&ndash;191 block, so the network address is 172.16.128.0 &mdash; not simply the third octet zeroed out to 172.16.130.0.'
+    },
+    {
+      id: 'basics-q18', objectiveId: 'basics-addressing', scenario: false,
+      prompt: 'Which CIDR notation is equivalent to the subnet mask 255.255.255.240?',
+      choices: ['/26', '/27', '/28', '/29'],
+      answer: 2,
+      explanation: '240 in binary is 11110000 &mdash; four borrowed host bits in the last octet, on top of the 24 full network bits, giving /28.'
+    },
+    {
+      id: 'basics-q19', objectiveId: 'basics-addressing', scenario: true,
+      prompt: 'A small office needs a subnet with room for exactly 25 usable host addresses, and wants to avoid wasting address space. What is the smallest subnet (CIDR) that fits?',
+      choices: ['/25', '/26', '/27', '/28'],
+      answer: 2,
+      explanation: 'A /28 only offers 14 usable hosts &mdash; too few. A /27 offers 30 usable hosts, which fits 25 with the least waste. /26 and /25 both work but provide far more addresses than needed.'
     },
   ],
 };

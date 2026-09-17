@@ -57,7 +57,8 @@ window.SECTION_PROTOCOLS = {
       body: `
         <p><strong>TCP</strong> is careful and slow, like a delivery truck that checks every box arrived and puts them back in order if they got mixed up. Used for things that MUST be perfect, like loading a webpage or sending a file.</p>
         <p><strong>UDP</strong> is fast and doesn't look back, like a race car that just zooms ahead. It doesn't double-check anything, so it's used for things where speed matters more than perfection, like video calls or online games.</p>
-        <p><strong>Remember this:</strong> need it perfect? TCP. Need it FAST, and a tiny glitch is okay? UDP.</p>
+        <p>Before TCP sends any real data, it does a quick handshake to make sure both sides are ready &mdash; three messages, in order: <strong>SYN</strong> ("can we talk?"), <strong>SYN-ACK</strong> ("yes, go ahead"), <strong>ACK</strong> ("great, starting now"). UDP skips this entirely, which is part of why it's faster.</p>
+        <p><strong>Remember this:</strong> need it perfect? TCP (and its SYN, SYN-ACK, ACK handshake). Need it FAST, and a tiny glitch is okay? UDP.</p>
       `,
       diagram: null,
     },
@@ -95,6 +96,7 @@ window.SECTION_PROTOCOLS = {
       image: 'shared-door',
       body: `
         <p><strong>NAT</strong> lets a whole building full of devices share just ONE public address when they go out onto the internet, kind of like a whole office sharing one return address on outgoing mail. The router keeps a list so it knows which device each reply belongs to.</p>
+        <p>The devices inside use <strong>private addresses</strong> &mdash; ones set aside just for internal use and never handed out on the public internet. Three ranges are reserved for this: <code>10.0.0.0</code>&ndash;<code>10.255.255.255</code>, <code>172.16.0.0</code>&ndash;<code>172.31.255.255</code>, and <code>192.168.0.0</code>&ndash;<code>192.168.255.255</code>. Any address outside those ranges is public.</p>
         <p><strong>Remember this:</strong> NAT saves public addresses (since there aren't unlimited IPv4 ones) and also hides your private devices from being directly reachable from the outside internet.</p>
       `,
       diagram: null,
@@ -223,6 +225,34 @@ window.SECTION_PROTOCOLS = {
       choices: ['AES', 'RSA only', 'No encryption', 'MD5'],
       answer: 0,
       explanation: 'WPA2 uses AES (Advanced Encryption Standard) for encrypting wireless traffic.'
+    },
+    {
+      id: 'proto-q17', objectiveId: 'proto-dns-dhcp', scenario: true,
+      prompt: 'A laptop joins a network and needs to load a website. Put the two protocol steps in the correct order.',
+      choices: ['DNS resolves the site name first, then DHCP assigns the laptop an IP address', 'DHCP assigns the laptop an IP address first, then DNS resolves the site name to reach it', 'Both happen simultaneously and order never matters', 'DNS assigns the address, then DHCP resolves the site name'],
+      answer: 1,
+      explanation: 'The laptop needs its own IP address (from DHCP) before it can send or receive any traffic at all &mdash; including the DNS query needed to resolve the website\'s name to an address.'
+    },
+    {
+      id: 'proto-q18', objectiveId: 'proto-tcp-udp', scenario: false,
+      prompt: 'What is the correct order of TCP\'s three-way handshake used to establish a connection?',
+      choices: ['ACK, SYN, SYN-ACK', 'SYN, SYN-ACK, ACK', 'SYN-ACK, SYN, ACK', 'SYN, ACK, SYN-ACK'],
+      answer: 1,
+      explanation: 'TCP opens a connection with SYN (the client requests a connection), SYN-ACK (the server acknowledges and replies), then ACK (the client confirms) &mdash; only then does data start flowing.'
+    },
+    {
+      id: 'proto-q19', objectiveId: 'proto-ports', scenario: false,
+      prompt: 'Which of the following correctly pairs a port number with its protocol?',
+      choices: ['Port 21 &mdash; SSH', 'Port 25 &mdash; SMTP', 'Port 53 &mdash; HTTPS', 'Port 443 &mdash; DNS'],
+      answer: 1,
+      explanation: 'Port 25 is SMTP (outgoing email). Port 21 is FTP (not SSH, which is port 22), port 53 is DNS (not HTTPS), and port 443 is HTTPS (not DNS) &mdash; the other three pairings are swapped.'
+    },
+    {
+      id: 'proto-q20', objectiveId: 'proto-nat', scenario: false,
+      prompt: 'Which of the following is a private IP address that would need NAT to reach the public internet?',
+      choices: ['8.8.8.8', '172.16.5.20', '203.0.113.10', '1.1.1.1'],
+      answer: 1,
+      explanation: '172.16.0.0&ndash;172.31.255.255 is one of the reserved private address ranges (along with 10.0.0.0/8 and 192.168.0.0/16). The other three are all public, internet-routable addresses.'
     },
   ],
 };

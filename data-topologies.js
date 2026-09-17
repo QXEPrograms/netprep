@@ -121,9 +121,9 @@ window.SECTION_TOPOLOGIES = {
     {
       id: 'topo-q2', objectiveId: 'topo-p2p-client-server', scenario: false,
       prompt: 'What is the main drawback of a client-server model compared to peer-to-peer?',
-      choices: ['It cannot support more than a few devices', 'The server can be a single point of failure', 'It is impossible to secure', 'It requires no configuration'],
+      choices: ['It scales worse as more users are added', 'The server can be a single point of failure', 'It is harder to centrally secure than peer-to-peer', 'It requires every client to also act as a server'],
       answer: 1,
-      explanation: 'Centralizing resources on a server improves management and security but means the server failing can take down access for everyone, unless redundancy is added.'
+      explanation: 'Centralizing resources on a server improves management, security, and scaling &mdash; the opposite of the first and third options &mdash; but means the server failing can take down access for everyone, unless redundancy is added.'
     },
     {
       id: 'topo-q3', objectiveId: 'topo-lan-man-wan', scenario: false,
@@ -184,9 +184,9 @@ window.SECTION_TOPOLOGIES = {
     {
       id: 'topo-q11', objectiveId: 'topo-cloud-tradeoffs', scenario: true,
       prompt: 'A hospital is hesitant to move all patient records fully to a public cloud provider. What is the most likely underlying concern?',
-      choices: ['Cloud storage is always slower', 'Data security, compliance, and loss of direct control over sensitive data', 'The cloud cannot store large files', 'Cloud providers do not offer redundancy'],
+      choices: ['Cloud storage costs less than on-premises hardware', 'Data security, compliance, and loss of direct control over sensitive data', 'The cloud automatically encrypts all stored data', 'Cloud providers offer better redundancy than on-premises servers'],
       answer: 1,
-      explanation: 'Regulated industries handling sensitive data often worry about compliance, data residency, and trusting a third party with control over that data &mdash; not raw performance.'
+      explanation: 'Regulated industries handling sensitive data often worry about compliance, data residency, and trusting a third party with control over that data. The other options describe real cloud benefits, not reasons to hesitate.'
     },
     {
       id: 'topo-q12', objectiveId: 'topo-wireless-factors', scenario: false,
@@ -208,6 +208,27 @@ window.SECTION_TOPOLOGIES = {
       choices: ['5G only works indoors', 'Higher-frequency millimeter-wave spectrum has shorter range', 'It uses satellite instead of towers', 'Small cells are cheaper to build than large towers'],
       answer: 1,
       explanation: 'The millimeter-wave spectrum 5G uses for its highest speeds has much shorter range, requiring denser tower placement to maintain coverage.'
+    },
+    {
+      id: 'topo-q15', objectiveId: 'topo-cloud-service-models', scenario: true,
+      prompt: 'A company wants full control over its operating systems and software stack, but does not want to own or maintain physical servers. Which cloud model fits best?',
+      choices: ['IaaS', 'PaaS', 'SaaS', 'On-premises'],
+      answer: 0,
+      explanation: 'IaaS rents the raw infrastructure (servers, storage, networking) while leaving the OS and everything above it in the customer\'s hands &mdash; the opposite tradeoff from PaaS or SaaS.'
+    },
+    {
+      id: 'topo-q16', objectiveId: 'topo-wireless-factors', scenario: true,
+      prompt: 'A coffee shop\'s Wi-Fi feels noticeably slower every afternoon when the most customers are connected, even though nothing else has changed. What is the most likely cause?',
+      choices: ['The router\'s firmware needs updating', 'Available bandwidth is being shared across more connected devices', 'The ISP throttles speeds every afternoon', 'The access point has moved to a different frequency band'],
+      answer: 1,
+      explanation: 'All connected devices share one access point\'s total bandwidth, so more simultaneous users directly means less throughput per device &mdash; the classic afternoon-rush slowdown.'
+    },
+    {
+      id: 'topo-q17', objectiveId: 'topo-shapes', scenario: true,
+      prompt: 'A network designer is comparing star and mesh topologies for a mid-size office with a normal (not mission-critical) budget. Which statement best justifies choosing star over mesh here?',
+      choices: ['Star topology is more fault-tolerant than mesh', 'Star costs less to cable and manage, and the office can tolerate brief downtime if the hub fails', 'Mesh topology cannot be used in offices', 'Star topology requires no central device'],
+      answer: 1,
+      explanation: 'Mesh is more fault-tolerant, not star &mdash; but that redundancy costs more in cabling and complexity. For a typical office without mission-critical uptime needs, star\'s lower cost is the deciding factor.'
     },
   ],
 };

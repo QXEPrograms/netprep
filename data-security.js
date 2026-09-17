@@ -163,9 +163,9 @@ window.SECTION_SECURITY = {
     {
       id: 'sec-q3', objectiveId: 'sec-risk-sources', scenario: false,
       prompt: 'What makes a "zero-day" vulnerability especially dangerous?',
-      choices: ['It only affects networks zero days old', 'The vendor has had no time to release a patch for it', 'It cannot be exploited remotely', 'It only affects outdated hardware'],
+      choices: ['It always originates from an internal employee', 'The vendor has had no time to release a patch for it', 'It can be fully blocked by antivirus software alone', 'It only affects outdated, unsupported hardware'],
       answer: 1,
-      explanation: 'Zero-day means the vendor has had zero days to fix it &mdash; there is no patch yet, so standard mitigation (patching) is not yet possible.'
+      explanation: 'Zero-day means the vendor has had zero days to fix it &mdash; there is no patch yet, so standard mitigation (patching) is not yet possible. It can affect current, fully-supported software just as easily.'
     },
     {
       id: 'sec-q4', objectiveId: 'sec-risk-sources', scenario: true,
@@ -285,6 +285,34 @@ window.SECTION_SECURITY = {
       choices: ['It requires more passwords than normal logins', 'A compromised SSO account can grant access to every connected system', 'It cannot be used with cloud applications', 'It disables MFA by design'],
       answer: 1,
       explanation: 'SSO centralizes access &mdash; convenient, but it also means one compromised account can expose every system tied to it.'
+    },
+    {
+      id: 'sec-q21', objectiveId: 'sec-authentication', scenario: true,
+      prompt: 'A system requires a password and a separate 4-digit PIN to log in. Does this qualify as true multi-factor authentication?',
+      choices: ['Yes, because two separate credentials are required', 'No, because a password and a PIN are both "something you know," not two different factor categories', 'Yes, because PINs are always biometric', 'No, because MFA requires exactly three factors'],
+      answer: 1,
+      explanation: 'True MFA requires factors from at least two different categories (know / have / are). A password and a PIN are both things you know, so this is really just two-step verification of the same factor type, not real MFA.'
+    },
+    {
+      id: 'sec-q22', objectiveId: 'sec-mitigations', scenario: true,
+      prompt: 'A security audit finds a server running several outdated services on ports it no longer uses, alongside a few actively-used, unpatched applications. What should be addressed first as the highest-leverage fix?',
+      choices: ['Buy a more expensive firewall', 'Close the unused ports and patch the actively-used software', 'Replace the server hardware entirely', 'Disconnect the server from the network permanently'],
+      answer: 1,
+      explanation: 'Closing unused ports and patching known software vulnerabilities directly shrinks the attack surface with the least cost and disruption &mdash; the standard first move before considering bigger changes like new hardware.'
+    },
+    {
+      id: 'sec-q23', objectiveId: 'sec-hashing-certs', scenario: true,
+      prompt: 'A user downloads a software installer and the vendor\'s website lists a SHA-256 hash next to the download link. Why would the user compare it to the hash of their downloaded file?',
+      choices: ['To decrypt the installer before running it', 'To confirm the file was not corrupted or tampered with during download', 'To verify the vendor\'s identity', 'To speed up the installation process'],
+      answer: 1,
+      explanation: 'Comparing hashes verifies integrity &mdash; that the downloaded file exactly matches what the vendor published, with no corruption or tampering in between. It says nothing about the vendor\'s identity (that\'s what a certificate does) and hashing is not encryption.'
+    },
+    {
+      id: 'sec-q24', objectiveId: 'sec-cia', scenario: true,
+      prompt: 'A company encrypts all customer records stored on its servers so that even someone who steals the physical hard drive cannot read the data. Which part of the CIA triad does this protect?',
+      choices: ['Confidentiality', 'Integrity', 'Availability', 'Authentication'],
+      answer: 0,
+      explanation: 'Encryption keeps data unreadable to unauthorized parties &mdash; that is confidentiality. It does not, by itself, prove the data hasn\'t been altered (integrity) or guarantee access when needed (availability).'
     },
   ],
 };
