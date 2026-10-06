@@ -83,7 +83,7 @@ html, body {
 .shot-feedback {
   position: absolute;
   left: 50%;
-  top: 7%;
+  top: max(11%, 64px);   /* always below the score panel */
   transform: translateX(-50%);
   text-align: center;
   opacity: 0;
@@ -113,3 +113,42 @@ html, body {
   75%  { opacity: 1; }
   100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
 }
+
+/* Score panel */
+.scoreboard {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 10px 7px 18px;
+  border-radius: 12px;
+  background: rgba(10, 14, 24, 0.78);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 6px 18px rgba(0, 0, 0, 0.4);
+  color: #fff;
+}
+.scoreboard__label {
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.8);
+}
+.scoreboard__value {
+  min-width: 42px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #ff7a1a;
+  font-size: 24px;
+  line-height: 1;
+  text-align: center;
+}
+.scoreboard.is-pop .scoreboard__value { animation: score-pop 0.45s ease-out; }
+@keyframes score-pop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.3); background: #2ee678; }
+  100% { transform: scale(1); }
+}
+
+.shot-feedback.is-made .shot-feedback__main { color: #ffffff; }
+.shot-feedback.is-missed .shot-feedback__main { color: #ff7b6b; }

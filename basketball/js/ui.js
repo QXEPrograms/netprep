@@ -1,5 +1,5 @@
-// UI: DOM overlay for the shot meter and release feedback. It only reads game
-// state (the ShootingSystem); it never changes it.
+// UI: DOM overlay for the score, the shot meter and shot feedback. It only
+// reads game state (ShootingSystem, ScoringSystem); it never changes it.
 ISO.UI = class {
   constructor(container) {
     this.container = container;
@@ -23,7 +23,16 @@ ISO.UI = class {
     this.feedbackSub = el('div', 'shot-feedback__sub');
     this.feedback.append(this.feedbackMain, this.feedbackSub);
 
-    container.append(this.meter, this.feedback);
+    // Score panel.
+    this.scoreboard = el('div', 'scoreboard');
+    const label = el('div', 'scoreboard__label');
+    label.textContent = 'PLAYER';
+    this.scoreValue = el('div', 'scoreboard__value');
+    this.scoreValue.textContent = '0';
+    this.scoreboard.append(label, this.scoreValue);
+
+    container.append(this.scoreboard, this.meter, this.feedback);
+    this._score = 0;
 
     this._zonesSet = false;
     this._wasShooting = false;
@@ -33,9 +42,11 @@ ISO.UI = class {
     this._v = new THREE.Vector3();
   }
 
-  // shooting: ShootingSystem, anchor: world position to place the meter beside.
-  update(dt, shooting, camera, anchor) {
+  // state: { shooting, scoring, camera, anchor } — anchor is the world
+  // position the meter sits beside (the shooter).
+  update(dt, { shooting, scoring, camera, anchor }) {
     this._time += dt;
+    if (scoring) this._updateScore(scoring);
     if (!shooting) return;
     if (!this._zonesSet) this._setZones(shooting.timingZones);
 
@@ -63,6 +74,36 @@ ISO.UI = class {
     }
   }
 
+  _updateScore(scoring) {
+    if (scoring.score !== this._score) {
+      this._score = scoring.score;
+      this.scoreValue.textContent = String(scoring.score);
+      this.scoreboard.classList.remove('is-pop');
+      void this.scoreboard.offsetWidth;
+      this.scoreboard.classList.add('is-pop');
+    }
+    const r = scoring.resolvedThisFrame;
+    if (!r) return;
+    let main, sub, kind;
+    const pts = `+${r.points}${r.isThree ? '  ·  3PT' : ''}`;
+    if (r.made && r.timing === 'PERFECT') {
+      main = 'GREEN!'; sub = `${r.swish ? 'SWISH' : 'MADE'}  ·  ${pts}`; kind = 'perfect';
+    } else if (r.made) {
+      main = r.swish ? 'SWISH' : 'MADE'; sub = pts; kind = 'made';
+    } else {
+      main = 'MISSED'; sub = r.timing ? `${r.timing} RELEASE` : ''; kind = 'missed';
+    }
+    this._showFeedback(main, sub, kind);
+  }
+
+  _showFeedback(main, sub, kind) {
+    this.feedbackMain.textContent = main;
+    this.feedbackSub.textContent = sub;
+    this.feedback.className = `shot-feedback is-${kind}`;
+    void this.feedback.offsetWidth; // restart the pop animation
+    this.feedback.classList.add('is-shown');
+  }
+
   _setZones(z) {
     const band = (elm, a, b) => {
       elm.style.bottom = `${a * 100}%`;
@@ -81,11 +122,7 @@ ISO.UI = class {
     this.marker.style.bottom = `${(shooting.shotMeter * 100).toFixed(1)}%`;
     this.marker.style.opacity = '1';
 
-    this.feedbackMain.textContent = timing === 'PERFECT' ? 'GREEN!' : timing;
-    this.feedbackSub.textContent = timing === 'PERFECT' ? 'PERFECT RELEASE' : 'RELEASE';
-    this.feedback.className = `shot-feedback is-${kind}`;
-    void this.feedback.offsetWidth; // restart the pop animation
-    this.feedback.classList.add('is-shown');
+    this._showFeedback(timing === 'PERFECT' ? 'GREEN!' : timing, timing === 'PERFECT' ? 'PERFECT RELEASE' : 'RELEASE', kind);
   }
 
   // Keep the meter just to the right of the player's head on screen.

@@ -16,9 +16,15 @@
 // The meter: shotMeter goes 0 -> 1 from the press to autoRelease. The ideal
 // window is centered so the ball leaves the hand at the top of the jump.
 //
+// Accuracy: the release timing (and distance) sets a spread; a seeded random
+// error within that spread moves the aim point off the rim center, and the
+// hoop physics decides make or miss. A green release inside normal range has
+// no error, so it flies through the center of the rim.
+//
 // State for other systems: isShooting, shotPhase, shotProgress, shotMeter,
-// releaseTiming, releaseQuality, releasePosition, shotDistance, shotCount,
-// shotReleased (true on the frame the ball leaves the hand), timingZones.
+// releaseTiming, releaseQuality, releasePosition, releaseFeet, aimOffset,
+// shotDistance, shotCount, shotReleased (true on the frame the ball leaves the
+// hand), timingZones.
 (function () {
 const TIMINGS = ['VERY EARLY', 'EARLY', 'PERFECT', 'LATE', 'VERY LATE'];
 
@@ -42,6 +48,21 @@ ISO.ShootingSystem = class {
       pocket: [0.1, 0.3, 1.05],
       setPoint: [0.16, 0.22, 1.85],
       releasePoint: [0.18, 0.3, 2.1],
+
+      // Accuracy (aim error at the rim, meters). See shotSpread().
+      accuracy: {
+        greenRange: 8.5,        // green releases are dead-on up to this distance
+        deepGreenSpread: 0.05,  // ...then gain this much spread per meter beyond it
+        minGreenDist: 0.9,      // closer than this the ball rises into the rim from below
+        impossibleSpread: 0.06,
+        offBase: 0.07, offSlope: 0.12,    // EARLY / LATE
+        veryBase: 0.18, verySlope: 0.15,  // VERY EARLY / VERY LATE
+        minDistFactor: 0.6,
+        deepFrom: 8, deepSlope: 0.25,     // extra difficulty for very deep shots
+        depthScale: 1.25,       // misses are mostly short/long...
+        lateralScale: 0.8,      // ...less often left/right
+        timingBias: 0.25,       // early drifts short, late drifts long (in spreads)
+      },
     }, options);
     const s = this.settings;
     s.land = s.takeoff + s.airTime;
@@ -56,6 +77,10 @@ ISO.ShootingSystem = class {
     this.releaseQuality = 0;         // 0..1, 1 = dead-center of the ideal window
     this.releasePosition = new THREE.Vector3();
     this.releaseVelocity = new THREE.Vector3();
+    this.releaseFeet = new THREE.Vector3();   // player's floor position at release (for 2 vs 3)
+    this.aimOffset = { depth: 0, lateral: 0, spread: 0 }; // this shot's aim error
+    this.rng = mulberry32((Math.random() * 2 ** 32) >>> 0);
+    this._aim = new THREE.Vector3();
     this.shotDistance = 0;           // horizontal distance from release to the rim center
     this.shotCount = 0;
     this.shotReleased = false;       // true only on the frame the ball leaves the hand
@@ -192,7 +217,7 @@ ISO.ShootingSystem = class {
       this._ballLocal(t, jumpY, this._ball, loco);
       const releaseAt = this.extendStart !== null ? this.extendStart + s.extendTime : Infinity;
       if (t >= releaseAt) {
-        this._launch(this._ball);
+        this._launch(this._ball, loco);
       } else {
         this.ball.place(this._ball, dt);
       }
@@ -290,11 +315,80 @@ ISO.ShootingSystem = class {
     }
   }
 
-  // Detach the ball with a velocity that carries it to the rim on a natural arc.
-  _launch(pos) {
+  // How far off the aim point can be (meters, 1 standard deviation) for this
+  // release. 0 = dead center. Timing sets the base spread; distance scales it.
+  shotSpread(timing, quality, dist, releasePos) {
+    const a = this.settings.accuracy;
+    if (timing === 'PERFECT') {
+      // Green: on the money inside normal range, unless the spot itself makes
+      // the shot impossible (under the rim, behind the board).
+      const impossible = dist < a.minGreenDist || this._boardInPath(releasePos);
+      if (impossible) return a.impossibleSpread;
+      return Math.max(0, dist - a.greenRange) * a.deepGreenSpread;
+    }
+    const q = Math.max(0, Math.min(1, quality));
+    const base = (timing === 'EARLY' || timing === 'LATE')
+      ? a.offBase + a.offSlope * (1 - q)
+      : a.veryBase + a.verySlope * (1 - q);
+    return base * this.distanceFactor(dist);
+  }
+
+  // From behind or beside the backboard, would the ball's path to the rim
+  // run into the board? (Corner threes are beside the board and clear it.)
+  _boardInPath(pos) {
+    const H = ISO.CONFIG.hoop, rim = this.settings.target, r = this.ball.radius;
+    const faceZ = H.boardZ + r, halfW = H.boardWidth / 2 + r;
+    if (pos.z >= faceZ) return false;                 // in front of the board
+    if (Math.abs(pos.x) <= halfW) return true;        // directly behind it
+    const edgeX = Math.sign(pos.x) * halfW;
+    const t = (pos.x - edgeX) / (pos.x - rim.x);      // where the path reaches the board's edge
+    return pos.z + (rim.z - pos.z) * t < faceZ;
+  }
+
+  // Close shots are forgiving, threes less so, very deep shots much harder.
+  distanceFactor(d) {
+    const a = this.settings.accuracy;
+    return Math.max(a.minDistFactor, 0.55 + 0.1 * d) + Math.max(0, d - a.deepFrom) * a.deepSlope;
+  }
+
+  // Aim error for a release, in the shot's own frame: depth (+ = long, - = short)
+  // and lateral (+ = to the shooter's right). Early releases tend short, late
+  // ones long. Randomness comes from the seeded rng.
+  aimError(timing, quality, dist, releasePos) {
+    const a = this.settings.accuracy;
+    const spread = this.shotSpread(timing, quality, dist, releasePos);
+    if (spread <= 0) return { depth: 0, lateral: 0, spread: 0 };
+    const bias = timing.includes('EARLY') ? -a.timingBias : timing.includes('LATE') ? a.timingBias : 0;
+    return {
+      depth: (gauss(this.rng) * a.depthScale + bias) * spread,
+      lateral: gauss(this.rng) * a.lateralScale * spread,
+      spread,
+    };
+  }
+
+  // Seed the shot randomness (for reproducible tests).
+  setSeed(seed) {
+    this.rng = mulberry32(seed >>> 0);
+  }
+
+  // Detach the ball with a velocity that carries it toward the aim point (the
+  // rim center plus this release's error) on a natural arc. Physics then
+  // decides make or miss.
+  _launch(pos, loco) {
     const s = this.settings;
     const g = ISO.Basketball.GRAVITY;
-    const tgt = s.target;
+    const rim = s.target;
+    const d0 = Math.hypot(rim.x - pos.x, rim.z - pos.z);
+
+    const err = this.aimError(this.releaseTiming, this.releaseQuality, d0, pos);
+    this.aimOffset = err;
+    const ux = d0 > 1e-4 ? (rim.x - pos.x) / d0 : 0, uz = d0 > 1e-4 ? (rim.z - pos.z) / d0 : 1;
+    // Shooter's right, looking at the rim, is (-uz, ux).
+    const tgt = this._aim.set(
+      rim.x + ux * err.depth - uz * err.lateral,
+      rim.y,
+      rim.z + uz * err.depth + ux * err.lateral
+    );
     const dx = tgt.x - pos.x, dz = tgt.z - pos.z;
     const d = Math.hypot(dx, dz);
 
@@ -313,7 +407,8 @@ ISO.ShootingSystem = class {
     this.ball.setFree(pos, vel, spin);
     this.ball.holder = null;
     this.releasePosition.copy(pos);
-    this.shotDistance = d;
+    if (loco) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
+    this.shotDistance = d0;
     this.ballReleased = true;
     this.shotReleased = true;
     this.shotCount++;
@@ -347,6 +442,19 @@ ISO.ShootingSystem = class {
   }
 };
 
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// Standard normal sample (Box-Muller).
+function gauss(rng) {
+  const u = Math.max(1e-9, rng()), v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 function lerp3(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
 function smoothstep(a, b, v) { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); }

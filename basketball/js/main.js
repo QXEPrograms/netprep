@@ -47,6 +47,7 @@ ISO.Game = class {
     this.cameraController.setFocus(this.player.position);
     this.cameraController.snap();
 
+    this.scoring = new ISO.ScoringSystem({ shooting: this.player.shooting, hoop: this.hoopPhysics, ball: this.ball });
     this.ui = new ISO.UI(document.getElementById('hud'));
 
     this.clock = new THREE.Clock();
@@ -67,7 +68,13 @@ ISO.Game = class {
     this.hoop.net.update(dt);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.update(dt);
-    this.ui.update(dt, this.player.shooting, this.cameraController.camera, this.player.position);
+    this.scoring.update(dt);
+    this.ui.update(dt, {
+      shooting: this.player.shooting,
+      scoring: this.scoring,
+      camera: this.cameraController.camera,
+      anchor: this.player.position,
+    });
     this.renderer.render(this.scene, this.cameraController.camera);
   }
 };

@@ -34,6 +34,12 @@ ISO.CONFIG = {
     boardBottom: 2.9,
     boardThickness: 0.03,
   },
+  // Points per made shot, by where the shooter released it.
+  // (The original design used 1 / 2; change these two numbers to switch.)
+  scoring: {
+    inside: 2,             // inside the three-point line
+    outside: 3,            // on or beyond the three-point line
+  },
   colors: {
     background: 0x0b0f1a,
     paint: '#1d3a5f',
