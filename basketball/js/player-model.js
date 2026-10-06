@@ -222,7 +222,8 @@ ISO.PlayerModel = class {
     if (pose.shot && pose.shot.hop) this._poseHop(pose.shot.hop);
     if (pose.pass) this._posePass(pose.pass);
     if (pose.finish) this._poseFinish(pose.finish);
-    this._crossfade(dt, pose.finish ? 'finish' : pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
+    if (pose.defense) this._poseDefense(dt, pose.defense);
+    this._crossfade(dt, pose.defense ? 'defense' : pose.finish ? 'finish' : pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
     this._poseArms(dt, pose.dribble);
   }
 
@@ -325,6 +326,60 @@ ISO.PlayerModel = class {
     this.torso.rotation.y = lerp(this.torso.rotation.y, 0.12 * f.lead * air, w);
     this.body.rotation.z = lerp(this.body.rotation.z, 0, w);
     this.head.rotation.x = lerp(this.head.rotation.x, -0.25, w * air);   // eyes on the rim
+  }
+
+  // Defensive legs. In stance: low, wide base; sliding sideways the lead foot
+  // steps out and the trail foot pushes and closes (they never cross);
+  // pressure steps and backpedals are short and choppy. When the defender
+  // turns the hips to run, the normal run cycle takes over.
+  // d: { lateral, forward (m/s, body frame, + = right / toward chest),
+  //      run, jumpY, contest (0..1), planting }
+  _poseDefense(dt, d) {
+    const k = dt > 0 ? 1 - Math.exp(-10 * dt) : 1;
+    this._defRun = (this._defRun ?? 0) + ((d.run ? 1 : 0) - (this._defRun ?? 0)) * k;
+    const w = 1 - this._defRun;
+    if (w <= 0.001) return;
+    const lat = d.lateral, fw = d.forward;
+    const spd = Math.hypot(lat, fw);
+    const latAmt = spd > 0.05 ? Math.abs(lat) / spd : 0;
+    const move = Math.min(1, spd / 2.6);
+    this._defPhase = (this._defPhase || 0) + (Math.abs(lat) / 0.55 + Math.abs(fw) / 0.7) * Math.PI * dt;
+    const ph = this._defPhase, sn = Math.sin(ph);
+    const lead = lat >= 0 ? this.legs[0] : this.legs[1];   // legs[0] = character right
+    const slide = latAmt * move, fb = (1 - latAmt) * move;
+    const dir = fw >= 0 ? 1 : -1;
+    const jf = Math.min(1, (d.jumpY || 0) / 0.08);
+    const plant = d.planting ? 1 : 0;
+    const reach = (h, kn, z) => (0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn)) * Math.cos(z);
+    let grounded = -1;
+    for (const leg of this.legs) {
+      let hip = -0.55 - 0.08 * plant, knee = 1.05 + 0.15 * plant, out = 0.13 + 0.05 * plant;
+      if (leg === lead) {
+        out += 0.2 * Math.max(0, sn) * slide;
+        knee += 0.25 * Math.max(0, sn) * slide;
+        hip -= 0.1 * Math.max(0, sn) * slide;
+      } else {
+        out -= 0.11 * Math.max(0, -sn) * slide;
+        knee += 0.12 * Math.max(0, -sn) * slide;
+      }
+      const lp = ph + (leg === this.legs[0] ? 0 : Math.PI);
+      hip += -dir * Math.sin(lp) * (dir > 0 ? 0.26 : 0.3) * fb;
+      knee += Math.max(0, Math.cos(lp)) * 0.45 * fb;
+      // contest jump: legs extend
+      hip = lerp(hip, -0.08, jf); knee = lerp(knee, 0.18, jf); out = lerp(out, 0.05, jf);
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, hip, w);
+      leg.hip.rotation.z = lerp(leg.hip.rotation.z, leg.side * out, w);
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, knee, w);
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, lerp(-(hip + knee) * 0.9, 0.4, jf), w);
+      grounded = Math.max(grounded, reach(hip, knee, out));
+    }
+    grounded += 0.0675 - 0.92;
+    this.body.position.y = lerp(this.body.position.y, lerp(grounded, 0, jf) + (d.jumpY || 0), w);
+    this.body.position.x = lerp(this.body.position.x, 0, w);
+    const lean = lerp(fw < -0.5 ? 0.18 : 0.3, 0.06, d.contest || 0);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, lean, w);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0, w);
+    this.head.rotation.x = lerp(this.head.rotation.x, -0.22 - 0.2 * (d.contest || 0), w);   // eyes up on the ball handler
   }
 
   // Side-step hop: the lead foot reaches out sideways, the body hops low and

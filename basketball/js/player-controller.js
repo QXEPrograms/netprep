@@ -39,6 +39,9 @@ ISO.PlayerController = class {
     this._screenToWorld(axes, this._dir);
     this._handleMoves(dt);
     this.locomotion.update(dt, this._dir, this.input.isSprinting());
+    // Hook for systems that adjust the body after it moves (player contact),
+    // before the ball is placed from the body's position.
+    if (this.afterMove) this.afterMove(dt);
     this._updateBallHandling(dt);
   }
 

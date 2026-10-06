@@ -45,6 +45,21 @@ ISO.Game = class {
     });
     this.scene.add(this.player.object);
 
+    // CPU defender (?nodefense to practice alone). Contact is resolved right
+    // after the ball handler moves, before the ball is placed.
+    if (ISO.DEFENSE.enabled) {
+      this.defender = new ISO.DefenderController({
+        opponent: this.player,
+        ball: this.ball,
+        camera: this.cameraController.camera,
+        startPosition: new THREE.Vector3(0, 0, 7.1),
+        startFacing: 0,
+      });
+      this.scene.add(this.defender.object);
+      this.player.afterMove = (dt) => this.defender.resolveContact(dt);
+      if (ISO.CONFIG.debugPhysics) this.defenseDebug = new ISO.DefenseDebug(this.scene, this.defender, document.getElementById('hud'));
+    }
+
     // No teammates yet, so passing has no target in normal play. In debug mode
     // (?debug) a marker on the wing catches passes and throws them back.
     if (ISO.CONFIG.debugPhysics) {
@@ -80,7 +95,15 @@ ISO.Game = class {
 
   tick() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
+    this.step(dt);
+    this.renderer.render(this.scene, this.cameraController.camera);
+  }
+
+  // One simulation step (everything except rendering).
+  step(dt) {
+    if (this.defender) this.defender.update(dt);
     this.player.update(dt);
+    if (this.defender) this.defender.updateVisual(dt);
     this.ball.update(dt);
     if (this.debugPassTarget) this.debugPassTarget.update(dt);
     this.hoop.net.update(dt, this.ball);
@@ -94,7 +117,7 @@ ISO.Game = class {
       camera: this.cameraController.camera,
       anchor: this.player.position,
     });
-    this.renderer.render(this.scene, this.cameraController.camera);
+    if (this.defenseDebug) this.defenseDebug.update();
   }
 };
 
