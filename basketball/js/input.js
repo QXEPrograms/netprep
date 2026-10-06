@@ -9,17 +9,21 @@ ISO.Input = class {
       left: ['KeyA', 'ArrowLeft'],
       right: ['KeyD', 'ArrowRight'],
       sprint: ['ShiftLeft', 'ShiftRight'],
+      crossover: ['KeyE'],
     };
+    // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
+    this.presses = new Set();
     // Keys whose default browser behavior (page scrolling) we suppress.
     this.captured = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space']);
 
     window.addEventListener('keydown', (e) => {
       if (this.captured.has(e.code)) e.preventDefault();
+      if (!e.repeat && !this.keys.has(e.code)) this.presses.add(e.code);
       this.keys.add(e.code);
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     // Releasing keys while the window is unfocused would otherwise leave them "stuck".
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => { this.keys.clear(); this.presses.clear(); });
   }
 
   pressed(action) {
@@ -33,6 +37,15 @@ ISO.Input = class {
     const len = Math.hypot(x, y);
     if (len > 1) { x /= len; y /= len; }
     return { x, y };
+  }
+
+  // True once per physical key press: holding the key does not repeat it.
+  consumePress(action) {
+    let hit = false;
+    for (const code of this.bindings[action]) {
+      if (this.presses.delete(code)) hit = true;
+    }
+    return hit;
   }
 
   isSprinting() {

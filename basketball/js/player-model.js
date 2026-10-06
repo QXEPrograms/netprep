@@ -20,9 +20,9 @@ ISO.PlayerModel = class {
     this.roll = 0;      // smoothed sideways lean into turns
     this.stride = 0;    // smoothed 0..1 amount of running pose
     this.stance = 0;    // smoothed 0..1 dribbling stance
+    this._qFree = new THREE.Quaternion();
     this._ik = {
-      d: new THREE.Vector3(), pole: new THREE.Vector3(), elbow: new THREE.Vector3(),
-      hand: new THREE.Vector3(), u: new THREE.Vector3(), w: new THREE.Vector3(),
+      d: new THREE.Vector3(), pole: new THREE.Vector3(), u: new THREE.Vector3(),
       n: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(),
       m: new THREE.Matrix4(),
     };
@@ -89,7 +89,8 @@ ISO.PlayerModel = class {
       mesh(new THREE.CapsuleGeometry(0.045, 0.2, 4, 8), skin, elbow, 0, -0.13, 0);
       mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 10), mat(0xffffff, 0.6), elbow, 0, -0.2, 0); // wristband
       const hand = mesh(new THREE.SphereGeometry(0.055, 10, 8), skin, elbow, 0, -0.29, 0);
-      return { side, shoulder, elbow, hand };
+      // ikWeight: smoothed 0..1 blend from the free (guard/run) pose to the IK reach
+      return { side, shoulder, elbow, hand, ikWeight: 0, ikTarget: new THREE.Vector3() };
     });
 
     // Legs: hip -> knee -> foot
@@ -137,7 +138,9 @@ ISO.PlayerModel = class {
 
   // Sync the model to the locomotion state and animate limbs.
   // state: { position, facing, speed, runSpeed, sprinting, turnSpeed }
-  // pose (optional): { dribble: { side: +1 right / -1 left, target: world Vector3 } }
+  // pose (optional): { dribble: {
+  //   hands: [{ side: +1 right / -1 left, target: world Vector3, weight: 0..1 }],
+  //   body:  { crouch: 0..1 extra dip, twist: torso yaw (rad), roll: sideways lean (rad) } } }
   update(dt, state, pose = {}) {
     this.time += dt;
     this.root.position.copy(state.position);
@@ -159,7 +162,8 @@ ISO.PlayerModel = class {
     const p = this.phase;
 
     // Leg flex (crouch) keeps the feet planted: thigh forward, shin back, foot level.
-    const flex = 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s);
+    const extra = pose.dribble ? pose.dribble.body : NO_BODY;
+    const flex = 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * extra.crouch;
 
     // Legs: opposite phase; knee bends most while the leg swings forward.
     this.legs.forEach((leg, i) => {
@@ -184,32 +188,45 @@ ISO.PlayerModel = class {
     const bob = Math.abs(Math.sin(p)) * 0.06 * s;
     this.body.position.y = bob - 0.85 * (1 - Math.cos(flex));
 
-    const targetLean = 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance;
+    const targetLean = 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance + 0.1 * extra.crouch;
     this.lean += (targetLean - this.lean) * k;
     const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s));
     this.roll += (targetRoll - this.roll) * k;
     this.torso.rotation.x = this.lean + 0.06 * (1 - s);
-    this.body.rotation.z = this.roll;
-    this.torso.rotation.y = Math.sin(p) * 0.12 * s * (1 - 0.5 * this.stance); // counter-rotate shoulders
+    this.body.rotation.z = this.roll + extra.roll;
+    this.torso.rotation.y = Math.sin(p) * 0.12 * s * (1 - 0.5 * this.stance) // counter-rotate shoulders
+      - extra.twist;                                                       // +twist turns toward the character's right
     this.head.rotation.y = -this.torso.rotation.y * 0.8;
     this.head.rotation.x = -this.lean * 0.6;
 
-    if (pose.dribble) this._poseDribble(pose.dribble);
+    this._poseArms(dt, pose.dribble);
   }
 
-  // Dribbling hand reaches for the ball (2-bone IK); the off hand guards.
-  _poseDribble({ side, target }) {
-    // Character right (+1) is local -x, which is arms[0].
-    const ballArm = this.arms.find((a) => a.side === -side);
-    const offArm = this.arms.find((a) => a.side === side);
+  // Each arm blends from its free pose (run swing, or a guard in front while
+  // dribbling) to an IK reach toward its requested hand target. Weights are
+  // smoothed here so hand hand-offs (e.g. crossovers) never snap.
+  _poseArms(dt, dribble) {
     const st = this.stance;
+    const k = dt > 0 ? 1 - Math.exp(-24 * dt) : 1;
+    for (const arm of this.arms) {
+      // Character right (+1) is local -x, i.e. arm.side === -1.
+      const req = dribble ? dribble.hands.find((h) => h.side === -arm.side) : null;
+      const want = req ? req.weight : 0;
+      arm.ikWeight += (want - arm.ikWeight) * k;
+      if (req && want > 0) arm.ikTarget.copy(req.target);
 
-    // Off arm: forearm out in front as a guard, blended in with the stance.
-    offArm.shoulder.rotation.x = lerp(offArm.shoulder.rotation.x, -0.55, st);
-    offArm.shoulder.rotation.z = lerp(offArm.shoulder.rotation.z, offArm.side * 0.32, st);
-    offArm.elbow.rotation.x = lerp(offArm.elbow.rotation.x, -1.15, st);
+      // Free pose: guard arm out in front, blended in with the dribble stance.
+      arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -0.55, st);
+      arm.shoulder.rotation.z = lerp(arm.shoulder.rotation.z, arm.side * 0.32, st);
+      arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, -1.15, st);
+      if (arm.ikWeight < 0.002) continue;
 
-    this.solveArmIK(ballArm, target);
+      const freeQ = this._qFree.copy(arm.shoulder.quaternion);
+      const freeElbow = arm.elbow.rotation.x;
+      this.solveArmIK(arm, arm.ikTarget);
+      arm.shoulder.quaternion.copy(freeQ.slerp(arm.shoulder.quaternion, arm.ikWeight));
+      arm.elbow.rotation.x = lerp(freeElbow, arm.elbow.rotation.x, arm.ikWeight);
+    }
   }
 
   // Point the arm chain so the hand center lands on `target` (world space).
@@ -234,27 +251,26 @@ ISO.PlayerModel = class {
     if (pole.lengthSq() < 1e-6) pole.set(arm.side, 0, 0).addScaledVector(d, -d.x * arm.side);
     pole.normalize();
 
-    // Elbow and hand positions (relative to the shoulder).
-    const elbow = v.elbow.copy(d).multiplyScalar(Math.cos(alpha) * L1).addScaledVector(pole, Math.sin(alpha) * L1);
-    const hand = v.hand.copy(d).multiplyScalar(D);
-    const u = v.u.copy(elbow).normalize();                    // upper-arm direction
-    const w = v.w.copy(hand).sub(elbow).normalize();          // forearm direction
+    // Upper arm leans from the target line toward the pole by alpha.
+    const u = v.u.copy(d).multiplyScalar(Math.cos(alpha)).addScaledVector(pole, Math.sin(alpha));
+    // Bend direction (perpendicular to the upper arm, away from the pole). Taken
+    // from the elbow plane rather than the forearm, so it stays well defined —
+    // and the arm never flips its twist — even when the arm is nearly straight.
+    const n = v.n.copy(d).multiplyScalar(Math.sin(alpha)).addScaledVector(pole, -Math.cos(alpha));
 
     // Shoulder basis: local -y along the upper arm, local +z toward the bend.
-    const n = v.n.copy(w).addScaledVector(u, -w.dot(u));
-    if (n.lengthSq() < 1e-6) n.copy(pole).multiplyScalar(-1).addScaledVector(u, pole.dot(u));
-    n.normalize();
     const y = v.y.copy(u).negate();
     const x = v.x.crossVectors(y, n);
     v.m.makeBasis(x, y, n);
     arm.shoulder.quaternion.setFromRotationMatrix(v.m);
 
     // Elbow hinge: rotating -bend about x swings the forearm toward +z.
-    const bend = Math.acos(clamp(u.dot(w), -1, 1));
-    arm.elbow.rotation.set(-bend, 0, 0);
+    const interior = Math.acos(clamp((L1 * L1 + L2 * L2 - D * D) / (2 * L1 * L2), -1, 1));
+    arm.elbow.rotation.set(-(Math.PI - interior), 0, 0);
   }
 };
 
+const NO_BODY = { crouch: 0, twist: 0, roll: 0 };
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 })();

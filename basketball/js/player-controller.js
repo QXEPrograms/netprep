@@ -29,8 +29,19 @@ ISO.PlayerController = class {
   update(dt) {
     const axes = this.input.getMoveAxes();
     this._screenToWorld(axes, this._dir);
+    this._handleMoves();
     this.locomotion.update(dt, this._dir, this.input.isSprinting());
     this._updateBallHandling(dt);
+  }
+
+  // Ball-handling moves. Presses are consumed every frame so a press during a
+  // move or its cooldown is dropped rather than queued.
+  _handleMoves() {
+    if (!this.dribble) return;
+    if (this.input.consumePress('crossover')) this.dribble.requestCrossover();
+    // A crossover costs a little speed; Locomotion's speedScale hook keeps the
+    // movement physics themselves unchanged.
+    this.locomotion.speedScale = this.dribble.isCrossingOver ? this.dribble.settings.xSpeedScale : 1;
   }
 
   // Order matters: the dribble places the ball from the body's new position,
@@ -40,7 +51,7 @@ ISO.PlayerController = class {
     let pose = {};
     if (this.dribble && this.ball.holder === this) {
       this.dribble.update(dt, state);
-      pose = { dribble: this.dribble.getArmPose() };
+      pose = { dribble: this.dribble.getPose() };
     }
     this.model.update(dt, state, pose);
   }
