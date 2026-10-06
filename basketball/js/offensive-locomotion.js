@@ -50,6 +50,24 @@ ISO.OffensiveLocomotion = class extends ISO.Locomotion {
 
   get maxSpeed() { return (this.sprinting ? this.settings.sprintSpeed : this.settings.runSpeed) * this.speedScale; }
 
+  // Possession reset: back to a squared, controlled stance with no momentum,
+  // commitment, plant or push left over.
+  resetMotion(position, facing) {
+    super.resetMotion(position, facing);
+    this.attack = 0;
+    this.level = 'controlled';
+    this.acceleration.set(0, 0, 0);
+    this.inputDir.set(0, 0, 0);
+    this.plantState = 'none';
+    this.plantSide = 0;
+    this._plantT = 0;
+    this._pushT = 0;
+    this._holdT = 0;
+    this._holdDir.set(0, 0, 0);
+    this._prevV.set(0, 0, 0);
+    this.orientation.reset(facing);
+  }
+
   update(dt, dir, sprint) {
     const S = this.settings, M = this.M, C = M.commitment, A = M.accel, P = M.plant;
     const inMag = Math.min(1, Math.hypot(dir.x, dir.z));
@@ -201,6 +219,18 @@ ISO.OffenseOrientation = class {
     this.matchupLateral = 0;
   }
 
+  reset(facing) {
+    this.engageYaw = this.hipYaw = this.chestYaw = facing;
+    this.twist = 0;
+    this.headYaw = 0;
+    this.open = 0;
+    this.beaten = false;
+    this.matchupState = 'none';
+    this.matchupDepth = 0;
+    this.matchupLateral = 0;
+    this.context();
+  }
+
   context() {
     const L = this.loco, A = L.position, cfg = ISO.MOVEMENT.orientation;
     const rx = this.rim.x - A.x, rz = this.rim.z - A.z, rl = Math.hypot(rx, rz) || 1;
@@ -279,6 +309,16 @@ ISO.OffenseBodyPose = class {
     // debug values
     this.movementLean = 0; this.accelerationLean = 0; this.lateralLean = 0; this.forwardLean = 0;
     this.plantLean = 0; this.currentBodyLean = 0; this.targetBodyLean = 0;
+  }
+
+  // Upright and still (possession reset).
+  reset() {
+    this.lean.set(0, 0);
+    this.leanVel.set(0, 0);
+    this.target.set(0, 0);
+    Object.assign(this.out, { roll: 0, pitch: 0, sway: 0, crouch: 0, twist: 0, head: 0, handShift: 0, weight: 1 });
+    this.movementLean = this.accelerationLean = this.lateralLean = this.forwardLean = 0;
+    this.plantLean = this.currentBodyLean = this.targetBodyLean = 0;
   }
 
   // weight: 1 while dribbling, less while a shot/finish owns the body.

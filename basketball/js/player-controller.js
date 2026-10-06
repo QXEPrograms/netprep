@@ -1,10 +1,13 @@
-// PlayerController: turns input into movement for the user's player.
+// PlayerController: a player's OFFENSIVE role — turns their input into
+// basketball movement and ball handling. Each player entity (teams.js) owns
+// one, and runs it whenever that player's team has the ball.
 // Movement is camera-relative: "up" on the keyboard moves the player up the
 // screen, whatever angle the camera is at.
 ISO.PlayerController = class {
-  constructor({ input, camera, ball, startPosition, startFacing = Math.PI }) {
+  constructor({ input, camera, ball, startPosition, startFacing = Math.PI, model = null, playerId = null }) {
     this.input = input;
     this.camera = camera;
+    this.playerId = playerId;     // identity (the ball's ownerPlayerId reads this)
 
     // Basketball locomotion: commitment blend, plants, squared/open
     // orientation and lean (offensive-locomotion.js, tuned in movement-config.js).
@@ -13,7 +16,7 @@ ISO.PlayerController = class {
     this.locomotion.position.copy(startPosition);
     this.locomotion.facing = startFacing;
 
-    this.model = new ISO.PlayerModel();
+    this.model = model || new ISO.PlayerModel();
 
     // Ball handling is its own system; the controller just runs it each frame.
     this.ball = ball;
@@ -82,17 +85,47 @@ ISO.PlayerController = class {
     const ball = this.ball;
     if (ball.mode !== ISO.Basketball.MODES.FREE || this.busy) return;
     // A pass coming back (debug target): catch it when it reaches the hands.
+    // That is the only free ball a player ever picks up: shots are never
+    // chased or rebounded — the possession system ends the possession and
+    // hands the ball out again (possession.js).
     if (ball.returnPass) {
       const chest = this._tmp.set(loco.position.x + Math.sin(loco.facing) * 0.3, 1.2, loco.position.z + Math.cos(loco.facing) * 0.3);
       if (ball.position.distanceTo(chest) < 0.7) this._regainBall(dr.hand);
     }
-    // No rebounds yet: once the ball has settled (or had plenty of time), hand
-    // it back so play can continue.
-    if (ball.mode === ISO.Basketball.MODES.FREE && (ball.settled || ball.freeTime > 4)) this._regainBall('right');
-    // Dev reset after a block (no loose-ball rules yet): let the deflection
-    // play out for a moment so it can be seen, then hand the ball back.
-    else if (ball.mode === ISO.Basketball.MODES.FREE && ball.blockedAt !== null && ISO.DEFENSE &&
-             ball.freeTime - ball.blockedAt > ISO.DEFENSE.hands.resetAfter) this._regainBall('right');
+  }
+
+  // ---- role changes / possession resets ------------------------------------
+
+  // This player stops playing offense: drop every action in progress (and the
+  // ball, if it is still in the hands).
+  deactivate() {
+    this._cancelAll();
+    if (this.ball && this.ball.holder === this) this.ball.holder = null;
+    this.afterMove = null;
+  }
+
+  // Start a possession standing at `position`, facing `facing`, with no
+  // momentum, lean, move, shot, fatigue or buffered press left over. With the
+  // ball: it is attached to the dribble hand before anything moves.
+  resetForPossession({ position, facing, withBall = false, hand = 'right' }) {
+    this._cancelAll();
+    this.locomotion.resetMotion(position, facing);
+    if (this.bodyPose) this.bodyPose.reset();
+    if (withBall && this.ball) {
+      this.ball.resetForPossession(this);
+      this.dribble.resetFor(hand);
+    } else if (this.ball && this.ball.holder === this) this.ball.holder = null;
+    this._updateBallHandling(0);          // ball placed in the hand, pose settled
+  }
+
+  _cancelAll() {
+    if (this.offenseController) this.offenseController.reset();
+    if (this.shooting) this.shooting.cancel();
+    if (this.finishing) this.finishing.cancel();
+    if (this.passing) this.passing.cancel();
+    if (this.stepBack) this.stepBack.cancel();
+    if (this.dribble) this.dribble.resetFor(this.dribble.hand);
+    this.locomotion.drive = null;
   }
 
   _regainBall(hand) {

@@ -18,9 +18,9 @@ ISO.Input = class {
       hesitation: ['KeyC'],
       behindBack: ['KeyV'],
       inAndOut: ['KeyR'],
-      // ?defenseplayer test bot patterns
+      // CPU offense test patterns (while you defend)
       bot0: ['Digit0'], bot1: ['Digit1'], bot2: ['Digit2'], bot3: ['Digit3'],
-      bot4: ['Digit4'], bot5: ['Digit5'], bot6: ['Digit6'], bot7: ['Digit7'],
+      bot4: ['Digit4'], bot5: ['Digit5'], bot6: ['Digit6'], bot7: ['Digit7'], bot8: ['Digit8'],
     };
     // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
     this.presses = new Set();

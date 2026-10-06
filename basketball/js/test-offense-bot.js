@@ -1,12 +1,16 @@
-// Development only (?defenseplayer): lets you play DEFENSE against a scripted
-// ball handler so blocking/contesting can be tested by hand. This is not CPU
+// Development only: lets you play DEFENSE against a scripted ball handler so
+// possessions, blocking and contesting can be tested by hand. This is not CPU
 // offense: it just replays simple, repeatable offensive patterns through the
-// same input interface a human uses (VirtualInput), then puts the ball handler
-// back on their spot.
+// same input interface a human uses (VirtualInput).
+//
+// Managed (the normal game): the possession system starts one attempt per
+// CPU possession (startPossession) and does all resets; the bot never moves
+// anyone or touches the ball itself. By default it rotates through the
+// patterns; a number key pins one.
 //
 // Keys (while defending): 1 spot-up jumper, 2 pull-up, 3 step-back,
 // 4 side-step, 5 drive (layup/dunk), 6 floater, 7 pump fake then go,
-// 0 stand and dribble.
+// 0 stand and dribble, 8 back to rotating.
 (function () {
 // Same interface PlayerController/OffenseController read from Input.
 ISO.VirtualInput = class {
@@ -29,6 +33,7 @@ const MODES = {
   1: 'spot-up jumper', 2: 'pull-up', 3: 'step-back', 4: 'side-step', 5: 'drive to the rim',
   6: 'floater', 7: 'pump fake, then go', 0: 'stand and dribble',
 };
+const ROTATION = [1, 5, 2, 6, 4, 7, 3];
 
 ISO.OffenseTestBot = class {
   constructor({ player, input, camera, defender }) {
@@ -42,14 +47,30 @@ ISO.OffenseTestBot = class {
     this.rep = 0;
     this.spot = new THREE.Vector3(0, 0, 8.4);
     this._f = new THREE.Vector3();
+    this.managed = false;        // true: the possession system owns resets
+    this.pinned = null;          // a mode chosen with a number key (null = rotate)
+    this._rot = 0;
   }
 
   static get MODES() { return MODES; }
 
   setMode(m) {
+    if (m === 8) { this.pinned = null; return; }
     if (!(m in MODES)) return;
     this.mode = m;
+    if (this.managed) { this.pinned = m; return; }
     this._resetRep(true);
+  }
+
+  // Managed: a new possession for this ball handler (already placed with the
+  // ball by the possession system). One attempt per possession.
+  startPossession() {
+    const I = this.input;
+    I.down.clear(); I.pressed.clear(); I.sprint = false; this._move(0, 0);
+    this.mode = this.pinned !== null ? this.pinned : ROTATION[this._rot++ % ROTATION.length];
+    this.t = -0.3;
+    this.phase = 'wait';
+    this.rep++;
   }
 
   // World direction -> the screen axes the controller expects.
@@ -81,11 +102,13 @@ ISO.OffenseTestBot = class {
     const toRim = () => this._move(-P.locomotion.position.x, 1.6 - P.locomotion.position.z);
     const rimDist = () => Math.hypot(P.locomotion.position.x, P.locomotion.position.z - 1.6);
     if (this.phase === 'done') {
-      if (this.t > 1.8 && !P.busy) this._resetRep(false);   // watch the result, then go again
+      if (!this.managed && this.t > 1.8 && !P.busy) this._resetRep(false);   // watch the result, then go again
       return;
     }
     if (this.t < 0.9 || this.mode === 0) { this._move(0, 0); return; }
     const t = this.t - 0.9;
+    // Managed: never stall a possession (e.g. walled off on a drive) — shoot it.
+    if (this.managed && (this.phase === 'wait' || this.phase === 'drive') && t > 5 && !P.busy) { this._move(0, 0); I.sprint = false; I.press('shoot'); this.phase = 'shoot'; }
     switch (this.mode) {
       case 1: if (this.phase === 'wait') { I.press('shoot'); this.phase = 'shoot'; } holdGreen(); break;
       case 2:

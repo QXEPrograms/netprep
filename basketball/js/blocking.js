@@ -14,6 +14,9 @@
 // resolved with an impulse using the relative velocity (the hand's own motion
 // counts), restitution, friction and spin. No chance rolls.
 //
+// Attribution: the ball carries blockedBy { playerId, teamId, hand, type };
+// the block never decides the shot or the possession (the ball can still go in).
+//
 // Events/state: blockOccurred (frame flag), blockType ('fingertip' |
 // 'deflection' | 'rejection' | 'pop-up'), blockHand ('left' | 'right'),
 // blockContactPoint, blockContactTime (s after release), blockVelocityBefore,
@@ -52,6 +55,14 @@ ISO.HandCollider = class {
   }
 
   positionAt(alpha, out) { return out.lerpVectors(this.prev, this.cur, alpha); }
+
+  // Off, with no memory of where it was: the next sync starts fresh (a hand
+  // never sweeps from last possession's spot to this one's).
+  clear() {
+    this.active = false;
+    this._has = false;
+    this.velocity.set(0, 0, 0);
+  }
 };
 
 ISO.BlockSystem = class {
@@ -89,6 +100,20 @@ ISO.BlockSystem = class {
       !(w && (w.shotTouchedRim || w.shotTouchedBackboard));
   }
 
+  // Role change / possession reset: no live hands, no block state.
+  clear() {
+    for (const h of this.hands) h.clear();
+    this.active = false;
+    this.blockOccurred = false;
+    this.handBallDistance = Infinity;
+  }
+
+  // Who blocked (ids from the defender's player entity).
+  _blocker(hand, type) {
+    const e = this.defender.entity;
+    return { playerId: e ? e.id : null, teamId: e ? e.teamId : null, hand, type };
+  }
+
   // Once per frame, after the defender's pose: move the colliders to the hands.
   // handsActive: [right, left] legitimate defensive action per hand.
   sync(dt, handsActive) {
@@ -115,7 +140,14 @@ ISO.BlockSystem = class {
       if (!h.active) continue;
       if (h.cur.distanceTo(b.position) < b.radius + h.radius) {
         this.knockedLooseCount = (this.knockedLooseCount || 0) + 1;
-        return sys.knockLoose(shooter.locomotion);
+        if (!sys.knockLoose(shooter.locomotion)) return false;
+        // It is a block at the release: attribute it like one.
+        b.blockedAt = 0;
+        b.blockedBy = this._blocker(h.side > 0 ? 'right' : 'left', 'knock-loose');
+        this.blocksCount++;
+        this.lastBlock = { blockType: 'knock-loose', blockHand: b.blockedBy.hand, blockerPlayerId: b.blockedBy.playerId, blockerTeamId: b.blockedBy.teamId, blockContactTime: 0 };
+        if (this.events) this.events.emit('blockOccurred', this.lastBlock);
+        return true;
       }
     }
     return false;
@@ -175,9 +207,11 @@ ISO.BlockSystem = class {
     this.blockVelocityBefore.copy(before);
     this.blockDeflectionVelocity.copy(v);
     this.blocksCount++;
+    ball.blockedBy = this._blocker(this.blockHand, type);
     const f = (x) => +x.toFixed(3);
     this.lastBlock = {
       blockType: type, blockHand: this.blockHand,
+      blockerPlayerId: ball.blockedBy.playerId, blockerTeamId: ball.blockedBy.teamId,
       blockContactPoint: [f(this.blockContactPoint.x), f(this.blockContactPoint.y), f(this.blockContactPoint.z)],
       blockContactTime: f(ball.freeTime),
       velocityBefore: [f(before.x), f(before.y), f(before.z)],

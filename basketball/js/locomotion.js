@@ -38,6 +38,18 @@ ISO.Locomotion = class {
     return Math.hypot(this.velocity.x, this.velocity.z);
   }
 
+  // Stand still at a spot (possession reset): no momentum, no move steering.
+  resetMotion(position, facing) {
+    this.position.copy(position);
+    this.velocity.set(0, 0, 0);
+    this.facing = facing;
+    this.turnSpeed = 0;
+    this.sprinting = false;
+    this.speedScale = 1;
+    this.accelScale = 1;
+    this.drive = null;
+  }
+
   get maxSpeed() {
     return (this.sprinting ? this.settings.sprintSpeed : this.settings.runSpeed) * this.speedScale;
   }

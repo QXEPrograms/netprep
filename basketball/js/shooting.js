@@ -145,6 +145,33 @@ ISO.ShootingSystem = class {
 
   get busy() { return this.isShooting || this.isPumpFaking; }
 
+  // Drop whatever is in progress (possession reset / role change). Counters
+  // and the random generator are kept.
+  cancel() {
+    this.isShooting = false;
+    this.shotCommitted = false;
+    this.shotPhase = null;
+    this.shotProgress = 0;
+    this.shotMeter = 0;
+    this.shotReleased = false;
+    this.ballReleased = false;
+    this.isPumpFaking = false;
+    this.pumpFakeProgress = 0;
+    this.pumpFakeCompleted = false;
+    this.variant = null;
+    this.pre = 0;
+    this.sideDir = null;
+    this.t = 0;
+    this.inputReleaseTime = null;
+    this.extendStart = null;
+    this._start = null;
+    this._fake = null;
+    this._tookOff = false;
+    this._takeoffVel.set(0, 0, 0);
+    this.drive.weight = 0;
+    this.drive.velocity.set(0, 0, 0);
+  }
+
   // Begin a gather (becomes a shot or a pump fake). handWorld(side, out) gives
   // a hand's world position so the gather starts exactly where the hands are.
   // dribbleHand is where the ball goes back to after a fake.

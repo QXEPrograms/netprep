@@ -108,14 +108,18 @@ ISO.ContestTracker = class {
 
 // ---------------------------------------------------------------------------
 ISO.DefenderController = class {
-  constructor({ opponent, ball, camera, startPosition, startFacing = 0 }) {
-    this.opponent = opponent;           // the ball handler's PlayerController
+  constructor({ opponent, ball, camera, startPosition, startFacing = 0, model = null, playerId = null }) {
+    this.playerId = playerId;
+    // The assignment: the offensive player (their PlayerController) this
+    // defender guards. Set by player id through Roster.linkMatchup, so it
+    // follows whoever has the ball after a possession change.
+    this.opponent = opponent;
     this.ball = ball;
     this.camera = camera;
     this.locomotion = new ISO.DefensiveLocomotion();
     this.locomotion.position.copy(startPosition);
     this.locomotion.facing = startFacing;
-    this.model = new ISO.PlayerModel({ jersey: 0x2f6fe0, trim: 0xf4f6fa, skin: 0x6b4428, shoes: 0x1b2333, number: '3' });
+    this.model = model || new ISO.PlayerModel({ jersey: 0x2f6fe0, trim: 0xf4f6fa, skin: 0x6b4428, shoes: 0x1b2333, number: '3' });
     this.ai = new ISO.DefenderAI(this);
     this.inputMapper = new ISO.DefenseInputMapper();
     this.contest = new ISO.ContestTracker(this);
@@ -128,6 +132,10 @@ ISO.DefenderController = class {
     // Plain, serializable input intent for a human/remote defender.
     this.humanInput = { x: 0, y: 0, sprint: false, jump: false, handsUp: false };
     this.lastIntent = null;
+    // Possession transitions: no new intent (CPU or human) — the body just
+    // settles in its stance, facing its man.
+    this.frozen = false;
+    this._still = { velocity: new THREE.Vector3(), faceTarget: new THREE.Vector3(), allowRun: false, jump: false };
 
     // Arms
     this.handRaise = 0;                 // 0..1 how far the contest arm is up (time-limited)
@@ -156,20 +164,38 @@ ISO.DefenderController = class {
 
   setControl(mode) { this.control = mode; }
 
-  // Put the defender somewhere (tests, future possession resets): standing,
-  // facing the ball handler, with a fresh view of the play.
+  // Put the defender somewhere (possession resets, tests): standing in
+  // stance, facing their man, feet on the floor, hands down and inactive,
+  // with a fresh view of the play (nothing carried over from before).
   reset(position) {
     const L = this.locomotion, O = this.opponent.locomotion.position;
     L.position.copy(position);
     L.velocity.set(0, 0, 0);
     L.facing = Math.atan2(O.x - position.x, O.z - position.z);
-    L.turnSpeed = 0; L.mode = 'stance'; L.isPlanting = false; L.speedScale = 1;
-    L.jumpState = 'ground'; L.jumpHeight = 0; L.verticalVelocity = 0; this.handRaise = 0;
+    L.turnSpeed = 0; L.mode = 'stance'; L.isPlanting = false; L.speedScale = 1; L._plantT = 0;
+    L.sprinting = false; L.lateralSpeed = 0; L.forwardSpeed = 0;
+    L.jumpState = 'ground'; L.jumpHeight = 0; L.verticalVelocity = 0; L.jumpTime = 0; L._carryRun = false;
+    this.handRaise = 0; this.handsUp = 0; this._contestReach = null;
     const ai = this.ai;
     ai._buf.length = 0; ai.perceived = ai.prevPerceived = null; ai._perceivedT = ai.time;
     ai._recentFakes.length = 0; ai._recentCrossovers.length = 0; ai._lastCrossoverSeen = -99;
     ai.state = 'guarding'; ai.stateTime = 0; ai.bite = null; ai.freeze = 0; ai._carry = 0; ai._spinBlind = null;
+    ai.wantJump = false; ai.handsUp = 0; ai._jumpDecision = null; ai._lastShotSeen = -99;
+    ai.intent.velocity.set(0, 0, 0);
     this.inputMapper.holdDist = null;
+    Object.assign(this.humanInput, { x: 0, y: 0, sprint: false, jump: false, handsUp: false });
+    const c = this.contest;
+    c.isContesting = false; c.contestStrength = 0; c.contestTiming = 0; c.contestHandDistance = Infinity;
+    this.blocks.clear();
+  }
+
+  // Role change: this player stops defending (hands can never block again
+  // until the next reset puts them back on defense).
+  deactivate() {
+    this.blocks.clear();
+    this.frozen = false;
+    this.handRaise = 0;
+    this.handsUp = 0;
   }
 
   get jumpY() { return this.locomotion.jumpHeight; }
@@ -181,15 +207,23 @@ ISO.DefenderController = class {
   // can only *ask* to jump or raise its hands, exactly like a human.
   update(dt) {
     const L = this.locomotion;
-    this.ai.observe(dt);
     let intent, handsUp;
-    if (this.control === 'human') {
+    if (this.frozen) {
+      intent = this._still;
+      intent.velocity.set(0, 0, 0);
+      intent.faceTarget.copy(this.opponent.locomotion.position);
+      intent.jump = false;
+      handsUp = false;
+      this.humanInput.jump = false;
+    } else if (this.control === 'human') {
+      this.ai.observe(dt);
       const hi = this.humanInput, opp = this.opponent.locomotion.position;
       intent = this.inputMapper.map(hi, this.camera, L, opp, this._basket, hi.sprint);
       intent.jump = !!hi.jump;
       hi.jump = false;                                   // an edge: one jump per press
       handsUp = !!hi.handsUp;
     } else {
+      this.ai.observe(dt);
       intent = this.ai.update(dt);
       intent.jump = this.ai.wantJump;
       handsUp = this.ai.handsUp >= 0.85;

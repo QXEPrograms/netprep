@@ -18,6 +18,9 @@ ISO.Basketball = class {
     this.radius = ISO.Basketball.RADIUS;
     this.mode = ISO.Basketball.MODES.CONTROLLED;
     this.holder = null;                       // who controls the ball (player controller)
+    // ownerPlayerId (getter below): the holder's playerId while the ball is
+    // controlled, null while it is free (shot, pass, deflection). Ownership is
+    // NOT team possession: a team keeps possession while its shot is in the air.
 
     this.position = new THREE.Vector3(0, this.radius, 0);
     this.velocity = new THREE.Vector3();      // derived from movement in controlled mode
@@ -33,6 +36,7 @@ ISO.Basketball = class {
     this.dynamicColliders = [];
     this.flightKind = null;                     // why the ball is free: 'shot' | 'pass' | 'loose'
     this.blockedAt = null;                      // freeTime of a block in this flight (null = none)
+    this.blockedBy = null;                      // { playerId, teamId, hand, type } of that block
     this._acc = 0;
 
     this.object = new THREE.Group();          // positioned, not rotated
@@ -45,6 +49,10 @@ ISO.Basketball = class {
     this._q = new THREE.Quaternion();
     this._tmp = new THREE.Vector3();
     this._hasPrev = false;
+  }
+
+  get ownerPlayerId() {
+    return this.mode !== ISO.Basketball.MODES.FREE && this.holder ? this.holder.playerId || null : null;
   }
 
   // Add the ball (and its floor contact shadow) to a scene.
@@ -78,6 +86,7 @@ ISO.Basketball = class {
     this.mode = ISO.Basketball.MODES.FREE;
     this.flightKind = kind;
     this.blockedAt = null;
+    this.blockedBy = null;
     this.position.copy(pos);
     this.velocity.copy(vel);
     this.angularVelocity.copy(spin || this._tmp.set(0, 0, 0));
@@ -87,6 +96,24 @@ ISO.Basketball = class {
     this.contacts = 0;
     this._acc = 0;
     this._hasPrev = false;
+    if (this.world) this.world.beginFlight();
+  }
+
+  // A new possession: no flight, no block, no leftover motion. The new ball
+  // handler's dribble places the ball right after this.
+  resetForPossession(holder) {
+    this.setControlled();
+    this.holder = holder;
+    this.flightKind = null;
+    this.blockedAt = null;
+    this.blockedBy = null;
+    this.returnPass = false;
+    this.velocity.set(0, 0, 0);
+    this.freeTime = 0;
+    this.settled = false;
+    this.bounces = 0;
+    this.contacts = 0;
+    this._acc = 0;
     if (this.world) this.world.beginFlight();
   }
 

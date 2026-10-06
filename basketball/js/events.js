@@ -1,9 +1,17 @@
 // GameEvents: results of the simulation, as plain events (no game logic).
-// Systems emit what happened; UI, scoring and (later) networking listen.
-//   shotReleased  { shooter, shotType, position, velocity, contest }
-//   blockOccurred { blockType, blockHand, blockContactPoint, blockContactTime,
-//                   velocityBefore, blockDeflectionVelocity, contest }
-//   basketMade    { points, swish, shotType }
+// Systems emit what happened; UI, possession and (later) networking listen.
+// Every payload names players and teams by id.
+//   shotReleased        { shotId, shooterPlayerId, shootingTeamId, shotType, isThree, value, position, velocity, contest }
+//   blockOccurred       { blockType, blockHand, blockerPlayerId, blockerTeamId, blockContactPoint, blockContactTime,
+//                         velocityBefore, blockDeflectionVelocity, contest }   (a block never decides the shot)
+//   basketMade          { shotId, points, swish, shotType, blocked, shooterPlayerId, teamId }
+//   shotResolved        { shotId, result: MAKE | MISS | BLOCKED_MAKE | BLOCKED_MISS, made, points, how,
+//                         shooterPlayerId, shootingTeamId, wasBlocked, blockerPlayerId, blockerTeamId, blockHand, blockType }
+//                         (exactly once per shotId)
+//   possessionWillChange { previousTeamId, newTeamId, reason, possessionNumber }   (the fade starts)
+//   possessionChanged    { previousTeamId, newTeamId, reason, possessionNumber }   (players reset, roles swapped)
+//   possessionStarted    { possessionNumber, offenseTeamId, defenseTeamId, ballHandlerPlayerId, reason, previousTeamId }
+//   possessionLive       { possessionNumber, offenseTeamId }                        (input live again)
 // Payloads are plain data, so they can be serialized as-is.
 ISO.GameEvents = class {
   constructor() {

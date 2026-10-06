@@ -58,6 +58,21 @@ ISO.FinishSystem = class {
     this._air = new THREE.Vector3();
   }
 
+  // Drop whatever is in progress (possession reset / role change).
+  cancel() {
+    this.busy = false;
+    this.finishType = null;
+    this.finishPhase = null;
+    this.finishProgress = 0;
+    this.shotReleased = false;
+    this.ballReleased = false;
+    this.t = 0;
+    this._tookOff = false;
+    this._air.set(0, 0, 0);
+    this.drive.weight = 0;
+    this.drive.velocity.set(0, 0, 0);
+  }
+
   // Use a seeded generator (e.g. the ShootingSystem's) for reproducible tests.
   setRng(rng) { this.rng = rng; }
 

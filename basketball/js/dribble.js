@@ -258,6 +258,27 @@ ISO.DribbleController = class {
     this.active = false;
   }
 
+  // Possession reset: no move, crossover, burst or smoothing left over; the
+  // dribble starts fresh in `hand` (resume() below).
+  resetFor(hand = 'right') {
+    for (const m of Object.values(this.moves)) {
+      m.active = false; m.completed = false; m.progress = 0; m.t = 0;
+      for (const k of ['isSpinning', 'isHesitating', 'isInAndOut', 'isBehindBack']) if (k in m) m[k] = false;
+    }
+    this.crossoverCompleted = false;
+    this.crossoverProgress = 0;
+    this.crossoverBurst = 0;
+    this.crossoverDirection = 0;
+    this.crossoverFakeDirection = 0;
+    this.moveExited = null;
+    this.execScale = 1;
+    this.leadScale = 1;
+    this._burstT = 0;
+    this._runAmt = this._sprintAmt = this._attackAmt = this._retreatAmt = this._pressureAmt = this._lateralAmt = undefined;
+    for (const b of [this.body, this.bodyOut]) Object.assign(b, { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0, stride: 1, forward: 0, turnRoll: 1 });
+    this.resume(hand);
+  }
+
   // Start dribbling again with the ball in `hand`, at the top of the bounce.
   resume(hand = 'right') {
     this.active = true;

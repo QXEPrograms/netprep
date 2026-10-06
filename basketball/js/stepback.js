@@ -116,6 +116,20 @@ ISO.StepBackMove = class {
   }
 
   // End the move now (e.g. a shot starts during the landing). Counts as completed.
+  // Drop it entirely (possession reset / role change): no cooldown carried over.
+  cancel() {
+    this.isSteppingBack = false;
+    this.stepBackProgress = 0;
+    this.stepBackPhase = null;
+    this.stepBackCompleted = false;
+    this.cooldown = 0;
+    this.timeSinceStepBack = Infinity;
+    this.t = 0;
+    this.pushDistance = 0;
+    this.drive.weight = 0;
+    this.drive.velocity.set(0, 0, 0);
+  }
+
   endEarly() {
     if (!this.isSteppingBack) return;
     this.isSteppingBack = false;

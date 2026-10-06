@@ -153,7 +153,7 @@ ISO.DEFENSE = {
     maxShotAge: 1.6,       // only shots in their first 1.6 s of flight can be blocked
     tipAngle: 0.21,        // < 12 degrees of direction change = fingertip
     popUpNormal: 0.55,     // contact from underneath (normal this much upward) = pop-up
-    resetAfter: 1.8,       // dev: seconds after a block before the ball is handed back
+    // (what happens after a block is the possession system's: GAMEFLOW.blockResetDelay)
   },
 
   // ---- contest (deterministic from player state) --------------------------------

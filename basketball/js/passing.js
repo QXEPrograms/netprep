@@ -53,6 +53,20 @@ ISO.PassingSystem = class {
     this._p = new THREE.Vector3();
   }
 
+  // Drop a pass in progress (possession reset / role change).
+  cancel() {
+    this.isPassing = false;
+    this.passType = null;
+    this.passTarget = null;
+    this.passReleased = false;
+    this.passCompleted = false;
+    this.passBlocked = false;
+    this.inFlight = null;
+    this.t = 0;
+    this.drive.weight = 0;
+    this.drive.velocity.set(0, 0, 0);
+  }
+
   addTarget(target) {
     if (!this.targets.includes(target)) this.targets.push(target);
   }

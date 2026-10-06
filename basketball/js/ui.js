@@ -1,9 +1,12 @@
-// UI: DOM overlay for the score, the shot meter and shot feedback. It only
-// reads game state (ShootingSystem, ScoringSystem); it never changes it.
+// UI: DOM overlay for the score, the shot meter, shot feedback and the
+// possession flow. It only reads game state (ShootingSystem, ScoringSystem,
+// PossessionSystem); it never changes it.
 ISO.UI = class {
   constructor(container, opts = {}) {
     this.container = container;
     this.role = opts.role || 'offense';
+    this.teams = opts.teams || null;
+    this.roster = opts.roster || null;
 
     // Shot meter: a vertical bar beside the shooter with marked timing zones.
     this.meter = el('div', 'shot-meter');
@@ -25,19 +28,61 @@ ISO.UI = class {
     this.feedbackSub = el('div', 'shot-feedback__sub');
     this.feedback.append(this.feedbackMain, this.feedbackSub);
 
-    // Score panel.
+    // Score panel: one score per TEAM (teams with players), and a dot on the
+    // team that has the ball.
     this.scoreboard = el('div', 'scoreboard');
-    const label = el('div', 'scoreboard__label');
-    label.textContent = 'PLAYER';
-    this.scoreValue = el('div', 'scoreboard__value');
-    this.scoreValue.textContent = '0';
-    this.scoreboard.append(label, this.scoreValue);
+    this.teamEls = {};
+    const teamIds = this.teams ? Object.keys(this.teams).filter((t) => !this.roster || this.roster.playersOn(t).length) : ['A'];
+    teamIds.forEach((id, i) => {
+      const t = this.teams ? this.teams[id] : { name: 'PLAYER', color: '#ff7a1a' };
+      const box = el('div', 'scoreboard__team');
+      const label = el('div', 'scoreboard__label');
+      label.textContent = teamIds.length > 1 ? t.name : 'PLAYER';
+      const value = el('div', 'scoreboard__value');
+      value.textContent = '0';
+      value.style.background = t.color;
+      const dot = el('span', 'scoreboard__ball');
+      if (i === 0) box.append(dot, label, value); else box.append(value, label, dot);
+      this.scoreboard.append(box);
+      this.teamEls[id] = { box, value, score: 0 };
+    });
 
-    // Controls guide along the bottom edge, grouped by what the keys do.
-    // [keys, label, alternate keys, short label for narrow screens]
+    // Possession: who has the ball now, and the quick fade that hides resets.
+    this.banner = el('div', 'possession-banner');
+    this.fadeEl = el('div', 'possession-fade');
+
     this.controls = el('div', 'controls-bar');
+    this._buildControls(this.role);
+
+    // Small transient notice (e.g. no pass target).
+    this.toast = el('div', 'hud-toast');
+
+    container.append(this.fadeEl, this.scoreboard, this.banner, this.meter, this.feedback, this.toast, this.controls);
+    this._toastUntil = 0;
+
+    this._zonesSet = false;
+    this._wasShooting = false;
+    this._judged = false;
+    this._meterHideAt = 0;
+    this._time = 0;
+    this._v = new THREE.Vector3();
+    this._shooting = null;
+    this._possNum = null;
+  }
+
+  // The controls guide follows the role YOUR player is playing.
+  setRole(role) {
+    if (role === this.role && this.controls.childElementCount) return;
+    this.role = role;
+    this._buildControls(role);
+  }
+
+  // Controls guide along the bottom edge, grouped by what the keys do.
+  // [keys, label, alternate keys, short label for narrow screens]
+  _buildControls(role) {
+    this.controls.textContent = '';
     // Controls depend on your role: on defense the same keys mean different things.
-    const GROUPS = opts.role === 'defense' ? [
+    const GROUPS = role === 'defense' ? [
       ['Defend', [
         [['W', 'A', 'S', 'D'], 'Pressure / slide / give ground', ['↑', '←', '↓', '→'], 'Move'],
         [['Shift'], 'Turn & run', null, 'Run'],
@@ -47,7 +92,7 @@ ISO.UI = class {
       ['Test offense', [
         [['1'], 'Jumper', null, 'Jumper'], [['2'], 'Pull-up', null, 'Pull-up'], [['3'], 'Step-back', null, 'Step'],
         [['4'], 'Side-step', null, 'Side'], [['5'], 'Drive', null, 'Drive'], [['6'], 'Floater', null, 'Float'],
-        [['7'], 'Pump fake', null, 'Fake'], [['0'], 'Stand', null, 'Stand'],
+        [['7'], 'Pump fake', null, 'Fake'], [['0'], 'Stand', null, 'Stand'], [['8'], 'Mix', null, 'Mix'],
       ]],
     ] : [
       ['Move', [
@@ -89,27 +134,17 @@ ISO.UI = class {
       }
       this.controls.append(group);
     }
-
-    // Small transient notice (e.g. no pass target).
-    this.toast = el('div', 'hud-toast');
-
-    container.append(this.scoreboard, this.meter, this.feedback, this.toast, this.controls);
-    this._toastUntil = 0;
-    this._score = 0;
-
-    this._zonesSet = false;
-    this._wasShooting = false;
-    this._judged = false;
-    this._meterHideAt = 0;
-    this._time = 0;
-    this._v = new THREE.Vector3();
+    this._barH = null;
   }
 
   // state: { shooting, scoring, camera, anchor } — anchor is the world
   // position the meter sits beside (the shooter).
-  update(dt, { shooting, passing, scoring, camera, anchor }) {
+  update(dt, { shooting, passing, scoring, possession, camera, anchor }) {
     this._time += dt;
+    if (possession) this._updatePossession(possession);
     if (scoring) this._updateScore(scoring);
+    // A different shooter (possession changed hands): the meter starts clean.
+    if (shooting !== this._shooting) { this._shooting = shooting; this._wasShooting = false; this._judged = true; this.meter.classList.remove('is-visible'); }
     if (passing && passing.passBlocked) this._showToast('No teammate to pass to yet');
     if (this._time > this._toastUntil) this.toast.classList.remove('is-shown');
     // Keep the toast just above the controls bar, however many rows it wraps to.
@@ -144,13 +179,33 @@ ISO.UI = class {
     }
   }
 
+  _updatePossession(P) {
+    this.fadeEl.style.opacity = P.fade > 0.001 ? P.fade.toFixed(3) : '0';
+    for (const id in this.teamEls) this.teamEls[id].box.classList.toggle('has-ball', P.offenseTeamId === id);
+    if (P.possessionNumber !== this._possNum) {
+      const first = this._possNum === null;
+      this._possNum = P.possessionNumber;
+      const t = this.teams && this.teams[P.offenseTeamId];
+      if (!first && t && Object.keys(this.teamEls).length > 1) {
+        this.banner.textContent = `${t.name} BALL`;
+        this.banner.style.color = t.color;
+        this.banner.classList.remove('is-shown');
+        void this.banner.offsetWidth;
+        this.banner.classList.add('is-shown');
+      }
+    }
+  }
+
   _updateScore(scoring) {
-    if (scoring.score !== this._score) {
-      this._score = scoring.score;
-      this.scoreValue.textContent = String(scoring.score);
-      this.scoreboard.classList.remove('is-pop');
-      void this.scoreboard.offsetWidth;
-      this.scoreboard.classList.add('is-pop');
+    const ts = scoring.teamScore || { A: scoring.score };
+    for (const id in this.teamEls) {
+      const T = this.teamEls[id], v = ts[id] || 0;
+      if (v === T.score) continue;
+      T.score = v;
+      T.value.textContent = String(v);
+      T.box.classList.remove('is-pop');
+      void T.box.offsetWidth;
+      T.box.classList.add('is-pop');
     }
     const r = scoring.resolvedThisFrame;
     if (!r) return;
@@ -174,7 +229,7 @@ ISO.UI = class {
 
   // A physical block happened (from the blockOccurred event).
   showBlock(e) {
-    const sub = { rejection: 'REJECTED', deflection: 'DEFLECTED', 'pop-up': 'POPPED UP', fingertip: 'FINGERTIP' }[e.blockType] || '';
+    const sub = { rejection: 'REJECTED', deflection: 'DEFLECTED', 'pop-up': 'POPPED UP', fingertip: 'FINGERTIP', 'knock-loose': 'AT THE RELEASE' }[e.blockType] || '';
     this._showFeedback('BLOCKED!', sub, 'bad');
   }
 

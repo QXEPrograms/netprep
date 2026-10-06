@@ -136,7 +136,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 7px 10px 7px 18px;
+  padding: 7px 12px;
   border-radius: 12px;
   background: rgba(10, 14, 24, 0.78);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 6px 18px rgba(0, 0, 0, 0.4);
@@ -156,7 +156,44 @@ html, body {
   line-height: 1;
   text-align: center;
 }
-.scoreboard.is-pop .scoreboard__value { animation: score-pop 0.45s ease-out; }
+.scoreboard__team { display: flex; align-items: center; gap: 10px; }
+.scoreboard__team + .scoreboard__team { padding-left: 14px; border-left: 1px solid rgba(255, 255, 255, 0.16); }
+/* the team with the ball */
+.scoreboard__ball {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #ff7a1a; box-shadow: 0 0 6px rgba(255, 122, 26, 0.9);
+  opacity: 0; transition: opacity 0.2s;
+}
+.scoreboard__team.has-ball .scoreboard__ball { opacity: 1; }
+.scoreboard__team.is-pop .scoreboard__value { animation: score-pop 0.45s ease-out; }
+
+/* Possession change: "TEAM B BALL" under the score, and the quick fade that hides resets */
+.possession-banner {
+  position: absolute;
+  left: 50%;
+  top: max(25%, 150px);   /* below the shot result text, which may still be fading */
+  transform: translateX(-50%);
+  font-size: clamp(14px, 2.2vw, 20px);
+  letter-spacing: 0.3em;
+  white-space: nowrap;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.7);
+  opacity: 0;
+  pointer-events: none;
+}
+.possession-banner.is-shown { animation: banner-pop 1.6s ease-out forwards; }
+@keyframes banner-pop {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+  15%  { opacity: 1; transform: translateX(-50%) translateY(0); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.possession-fade {
+  position: fixed;
+  inset: 0;
+  background: #05070d;
+  opacity: 0;
+  pointer-events: none;
+}
 @keyframes score-pop {
   0% { transform: scale(1); }
   35% { transform: scale(1.3); background: #2ee678; }

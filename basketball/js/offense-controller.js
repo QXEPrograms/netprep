@@ -29,6 +29,16 @@ ISO.OffenseController = class {
     this.lastAction = null;       // last action that actually started (for tests/HUD)
   }
 
+  // Possession reset: fatigue, chains, burst and buffered presses start fresh
+  // (nothing from the last possession punishes or helps this one).
+  reset() {
+    this.offense = new ISO.OffenseState();
+    this.buffered = null;
+    this.shotWanted = 0;
+    Object.assign(this.gather, { context: null, plan: null, action: null, reason: '' });
+    this.lastAction = null;
+  }
+
   // Dribble moves bound to keys: input action -> [move name, opts].
   static get MOVE_KEYS() {
     return [
