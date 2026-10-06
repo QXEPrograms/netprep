@@ -286,6 +286,7 @@ ISO.FinishSystem = class {
     return {
       kind: this.finishType, t: this.t, gather: tl.gather, takeoff: tl.takeoff, release: tl.release, land: tl.land, end: tl.end,
       jumpY: this.jumpHeight(this.t), lead: this.finishHand === 'right' ? 1 : -1, protected: this.protected,
+      released: this.ballReleased,
     };
   }
 

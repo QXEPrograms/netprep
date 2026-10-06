@@ -140,10 +140,6 @@ ISO.DefenderController = class {
     this.lastReachResult = '-';
     this.reactionLevel = 0;             // 0 none, 1 stumble, 2 stagger, 3 fall (while it lasts)
     this._wasReacting = false;
-    this._tiltV = new THREE.Vector3();
-    this._tiltQ = new THREE.Quaternion();
-    this._yawQ = new THREE.Quaternion();
-    this._up = new THREE.Vector3(0, 1, 0);
     this._reachT = new THREE.Vector3();
     // Possession transitions: no new intent (CPU or human) — the body just
     // settles in its stance, facing its man.
@@ -333,39 +329,6 @@ ISO.DefenderController = class {
     this.balance.balance = Math.min(this.balance.balance, 0.2);
   }
 
-  // The body tips toward the reach / the lost-balance side, pivoting on the feet.
-  _applyTilt() {
-    const L = this.locomotion, root = this.model.root, tv = this._tiltV.set(0, 0, 0);
-    if (this.reach) tv.addScaledVector(this.reach.dir, ISO.DEFENSE.steal.reachLean * this.reachExtent);
-    const r = L.reaction;
-    if (r) {
-      const A = ISO.DEFENSE.ankleBreak, u = Math.min(1, r.t / r.duration);
-      const ease = (x) => x * x * (3 - 2 * x);
-      let a;
-      if (r.level === 1) a = A.tilt[1] * Math.sin(Math.PI * u);
-      else if (r.level === 2) a = A.tilt[2] * (u < 0.25 ? ease(u / 0.25) : 1 - ease((u - 0.25) / 0.75)) * (1 + 0.18 * Math.sin(u * 19));
-      else a = A.tilt[3] * (u < 0.28 ? ease(u / 0.28) : u < 0.55 ? 1 : 1 - ease((u - 0.55) / 0.45));
-      tv.addScaledVector(r.dir, a);
-    }
-    // never tip the upper body into the ball handler: the lean toward them is
-    // limited to the room in front (contact keeps the feet apart, not the chest)
-    const o = this.opponent;
-    if (o && tv.lengthSq() > 1e-8) {
-      const ox = o.position.x - this.position.x, oz = o.position.z - this.position.z, gap = Math.hypot(ox, oz);
-      if (gap > 1e-3) {
-        const toward = (tv.x * ox + tv.z * oz) / gap;
-        const room = Math.asin(Math.max(0, Math.min(1, (gap - 0.82) / 1.3)));
-        if (toward > room) { const k = (toward - room) / gap; tv.x -= ox * k; tv.z -= oz * k; }
-      }
-    }
-    const ang = tv.length();
-    if (ang < 1e-4) { root.rotation.x = 0; root.rotation.z = 0; return; }
-    const axis = this._reachT.set(tv.z / ang, 0, -tv.x / ang);    // up x dir: the top moves toward dir
-    this._tiltQ.setFromAxisAngle(axis, ang);
-    this._yawQ.setFromAxisAngle(this._up, L.facing);
-    root.quaternion.copy(this._tiltQ).multiply(this._yawQ);
-  }
-
   // Soft body contact with the ball handler (call right after the ball
   // handler's movement, before their ball handling).
   resolveContact(dt) {
@@ -380,7 +343,6 @@ ISO.DefenderController = class {
   // are drawn when the ball moves).
   updateVisual(dt) {
     this.model.update(dt, this._modelState(), this._pose(dt));
-    this._applyTilt();
     // Hand colliders are live only during a real defensive action: a jump or
     // raised hands. Lowered "active hands" never block.
     const L = this.locomotion;
@@ -486,6 +448,12 @@ ISO.DefenderController = class {
       defense: {
         lateral: L.lateralSpeed, forward: L.forwardSpeed, run, jumpY: jy,
         contest: raise, planting: L.isPlanting,
+      },
+      // reach and ankle-break reactions, posed through the skeleton
+      balance: {
+        reach: this.reach ? { side: this.reach.side, extent: this.reachExtent, dir: this.reach.dir } : null,
+        reaction: L.reaction ? { level: L.reaction.level, t: L.reaction.t, duration: L.reaction.duration, dir: L.reaction.dir } : null,
+        opponent: this.opponent ? this.opponent.position : null,
       },
     };
   }

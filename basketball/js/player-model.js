@@ -1,19 +1,28 @@
-// PlayerModel: an original low-poly humanoid built from primitives, with a
-// procedural run cycle. It only handles visuals; movement lives in Locomotion.
-// The model faces +z in its local space; limbs rotate around pivot groups.
+// PlayerModel: drives the Player Model V2 character (character-rig.js: one
+// skinned mesh on a humanoid THREE.Skeleton) from the gameplay state.
+//
+//   gameplay / locomotion pose  ->  this adapter  ->  rig bones
+//
+// The gameplay root (`root`) is placed by gameplay only; the skeleton under it
+// is visual. The procedural pose layers below write local bone rotations
+// relative to the rig's rest pose (facing +z, limbs hanging straight down):
+//   body   (rig root)   bob / sway / roll / fall yaw
+//   hips                pelvis
+//   torso  (spineLower) lean + twist, spread up the spine to spineUpper/chest
+//   head, arms (clavicle / shoulder=upper arm / elbow=forearm / hand),
+//   legs (hip=thigh / knee=shin / ankle=foot)
+// After the pose layers: the balance layer (steal reach, ankle-break
+// reactions), the wrists, then a floor pass puts the lowest foot (or the seat,
+// in a fall) exactly on the floor at the current jump height, then the arm IK.
 (function () {
 ISO.PlayerModel = class {
   constructor(options = {}) {
-    this.opts = Object.assign({
-      jersey: 0xf26b1d,
-      trim: 0x1d3a5f,
-      skin: 0x8d5a3b,
-      shoes: 0xf4f4f4,
-      number: '7',
-    }, options);
-
-    this.root = new THREE.Group();
-    this.root.name = 'player';
+    // options: legacy colours ({ jersey, trim, skin, shoes, number }) and/or
+    // { teamId, playerId, jerseyNumber, colors, appearance } (see character-rig.js)
+    this.character = ISO.createBasketballPlayer(options);
+    this.opts = this.character.appearance;
+    this.rig = this.character.rig;
+    this.root = this.character.root;
     this.phase = 0;     // run-cycle phase (radians)
     this.time = 0;
     this.lean = 0;      // smoothed forward lean
@@ -21,95 +30,51 @@ ISO.PlayerModel = class {
     this.stride = 0;    // smoothed 0..1 amount of running pose
     this.stance = 0;    // smoothed 0..1 dribbling stance
     this._qFree = new THREE.Quaternion();
+    this._q = new THREE.Quaternion();
+    this._e = new THREE.Euler();
+    this._v = new THREE.Vector3();
+    this._w = new THREE.Vector3();
     this._xfCur = [];
     this._xf = 0;
+    this._airY = 0;            // how high the feet should be this frame (jumps)
+    this._reachW = 0;          // smoothed steal-reach amount
+    this._rx = { w: 0, level: 0 };   // ankle-break reaction pose state
+    this._wrist = 0;           // shooting-hand follow-through flex
     this._ik = {
       d: new THREE.Vector3(), pole: new THREE.Vector3(), u: new THREE.Vector3(),
       n: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(),
       m: new THREE.Matrix4(),
     };
+    this.L1 = this.rig.dims.upperArm;     // shoulder -> elbow
+    this.L2 = this.rig.dims.forearm;      // elbow -> palm centre
 
-    this._build();
+    this._bindRig();
   }
 
-  _build() {
-    const o = this.opts;
-    const mat = (color, rough = 0.7) => new THREE.MeshStandardMaterial({ color, roughness: rough });
-    const skin = mat(o.skin, 0.6);
-    const jersey = mat(o.jersey, 0.75);
-    const trim = mat(o.trim, 0.75);
-    const shoe = mat(o.shoes, 0.5);
-    const sole = mat(0x222222, 0.9);
-
-    const mesh = (geo, m, parent, x = 0, y = 0, z = 0) => {
-      const me = new THREE.Mesh(geo, m);
-      me.position.set(x, y, z);
-      me.castShadow = true;
-      parent.add(me);
-      return me;
-    };
-    const pivot = (parent, x, y, z) => {
-      const g = new THREE.Group();
-      g.position.set(x, y, z);
-      parent.add(g);
-      return g;
-    };
-
-    // Body bob/lean happens on `body`, which holds everything above the feet.
-    this.body = pivot(this.root, 0, 0, 0);
-
-    // Hips / shorts
-    this.hips = pivot(this.body, 0, 1.0, 0);
-    mesh(new THREE.BoxGeometry(0.4, 0.26, 0.24), jersey, this.hips, 0, -0.04, 0);
-    mesh(new THREE.BoxGeometry(0.41, 0.05, 0.25), trim, this.hips, 0, 0.08, 0); // waistband
-
-    // Torso (pivots at the waist so it can lean independently)
-    this.torso = pivot(this.hips, 0, 0.1, 0);
-    const chest = mesh(new THREE.BoxGeometry(0.44, 0.5, 0.24), [
-      jersey, jersey, jersey, jersey,
-      new THREE.MeshStandardMaterial({ map: this._numberTexture(o.number), roughness: 0.75 }),
-      new THREE.MeshStandardMaterial({ map: this._numberTexture(o.number), roughness: 0.75 }),
-    ], this.torso, 0, 0.26, 0);
-    chest.castShadow = true;
-    mesh(new THREE.BoxGeometry(0.46, 0.04, 0.26), trim, this.torso, 0, 0.5, 0);   // collar trim
-    mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.1, 10), skin, this.torso, 0, 0.56, 0); // neck
-
-    // Head
-    this.head = pivot(this.torso, 0, 0.7, 0);
-    mesh(new THREE.SphereGeometry(0.115, 16, 12), skin, this.head, 0, 0, 0);
-    const hair = mesh(new THREE.SphereGeometry(0.118, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2.2), mat(0x1a120c, 0.9), this.head, 0, 0.012, -0.004);
-    hair.castShadow = false;
-    mesh(new THREE.TorusGeometry(0.113, 0.014, 6, 20), mat(0xffffff, 0.6), this.head, 0, 0.04, 0).rotation.x = Math.PI / 2; // headband
-    mesh(new THREE.BoxGeometry(0.03, 0.03, 0.03), skin, this.head, 0, -0.01, 0.115); // nose (shows facing)
-
-    // Arms: shoulder -> elbow -> hand
+  // Name the rig bones the way the pose layers think about them.
+  _bindRig() {
+    const r = this.rig;
+    this.body = r.root;
+    this.hips = r.hips;
+    this.torso = r.spineLower;
+    this.spineUpper = r.spineUpper;
+    this.chest = r.chest;
+    this.neck = r.neck;
+    this.head = r.head;
+    // side = local x sign: -1 = character right, +1 = character left
     this.arms = [-1, 1].map((side) => {
-      const shoulder = pivot(this.torso, side * 0.27, 0.44, 0);
-      mesh(new THREE.SphereGeometry(0.075, 10, 8), jersey, shoulder, 0, 0, 0);
-      mesh(new THREE.CapsuleGeometry(0.052, 0.25, 4, 8), skin, shoulder, 0, -0.17, 0);
-      const elbow = pivot(shoulder, 0, -ARM_L1, 0);
-      mesh(new THREE.CapsuleGeometry(0.045, 0.23, 4, 8), skin, elbow, 0, -0.145, 0);
-      mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 10), mat(0xffffff, 0.6), elbow, 0, -0.23, 0); // wristband
-      const hand = mesh(new THREE.SphereGeometry(0.055, 10, 8), skin, elbow, 0, -ARM_L2, 0);
-      // ikWeight: smoothed 0..1 blend from the free (guard/run) pose to the IK reach
-      // shrug: smoothed shoulder lift when reaching high (dunks, layups)
-      return { side, shoulder, elbow, hand, ikWeight: 0, ikTarget: new THREE.Vector3(),
-        base: shoulder.position.clone(), shrug: 0 };
+      const pre = side < 0 ? 'right' : 'left';
+      const shoulder = r[pre + 'UpperArm'];
+      return { side, clavicle: r[pre + 'Clavicle'], shoulder, elbow: r[pre + 'Forearm'], hand: r[pre + 'Hand'],
+        // ikWeight: smoothed 0..1 blend from the free (guard/run) pose to the IK reach
+        // shrug: smoothed shoulder lift when reaching high (dunks, layups)
+        ikWeight: 0, ikTarget: new THREE.Vector3(), base: shoulder.position.clone(), shrug: 0 };
     });
-
-    // Legs: hip -> knee -> foot
     this.legs = [-1, 1].map((side) => {
-      const hip = pivot(this.hips, side * 0.11, -0.08, 0);
-      mesh(new THREE.CapsuleGeometry(0.08, 0.26, 4, 8), jersey, hip, 0, -0.14, 0); // shorts leg
-      mesh(new THREE.CapsuleGeometry(0.068, 0.2, 4, 8), skin, hip, 0, -0.3, 0);
-      const knee = pivot(hip, 0, -0.44, 0);
-      mesh(new THREE.CapsuleGeometry(0.06, 0.3, 4, 8), skin, knee, 0, -0.2, 0);
-      mesh(new THREE.CylinderGeometry(0.065, 0.06, 0.12, 10), mat(0xffffff, 0.7), knee, 0, -0.34, 0); // sock
-      const ankle = pivot(knee, 0, -0.41, 0);
-      mesh(new THREE.BoxGeometry(0.12, 0.09, 0.27), shoe, ankle, 0, -0.01, 0.05);
-      mesh(new THREE.BoxGeometry(0.125, 0.025, 0.28), sole, ankle, 0, -0.055, 0.05);
-      return { side, hip, knee, ankle };
+      const pre = side < 0 ? 'right' : 'left';
+      return { side, hip: r[pre + 'Thigh'], knee: r[pre + 'Shin'], ankle: r[pre + 'Foot'] };
     });
+    this._restHips = this.hips.position.clone();
 
     // Soft contact shadow so the player reads well even outside the shadow-map light
     const blob = new THREE.Mesh(
@@ -121,24 +86,8 @@ ISO.PlayerModel = class {
     this.root.add(blob);
   }
 
-  _numberTexture(num) {
-    const cv = document.createElement('canvas');
-    cv.width = 128; cv.height = 128;
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#' + this.opts.jersey.toString(16).padStart(6, '0');
-    ctx.fillRect(0, 0, 128, 128);
-    ctx.fillStyle = '#' + this.opts.trim.toString(16).padStart(6, '0');
-    ctx.font = '800 76px "Arial Black", Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = '#ffffff';
-    ctx.strokeText(num, 64, 70);
-    ctx.fillText(num, 64, 70);
-    const tex = new THREE.CanvasTexture(cv);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }
+  // Colours / number at runtime (no rebuild).
+  setAppearance(a) { this.character.setAppearance(a); this.opts = this.character.appearance; }
 
   // Sync the model to the locomotion state and animate limbs.
   // state: { position, facing, speed, runSpeed, sprinting, turnSpeed }
@@ -148,7 +97,14 @@ ISO.PlayerModel = class {
   update(dt, state, pose = {}) {
     this.time += dt;
     this.root.position.copy(state.position);
-    this.root.rotation.y = state.facing;
+    this.root.rotation.set(0, state.facing, 0);
+    // bones the layers below only add to start from rest every frame
+    this.body.rotation.set(0, 0, 0);
+    this.hips.position.copy(this._restHips); this.hips.rotation.set(0, 0, 0);
+    this.head.rotation.z = 0;
+    for (const a of this.arms) { a.clavicle.rotation.set(0, 0, 0); a.hand.rotation.set(0, 0, 0); }
+    for (const l of this.legs) l.hip.rotation.y = 0;
+    this._airY = 0;
 
     const moveAmt = Math.min(1, state.speed / state.runSpeed);        // 0..1 at run speed
     const sprintAmt = Math.max(0, Math.min(1, (state.speed - state.runSpeed) / 2));
@@ -252,14 +208,241 @@ ISO.PlayerModel = class {
     if (pose.finish) this._poseFinish(pose.finish);
     if (pose.defense) this._poseDefense(dt, pose.defense);
     this._crossfade(dt, pose.defense ? 'defense' : pose.finish ? 'finish' : pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
+    this._spreadSpine();
+    this._poseBalance(dt, pose.balance || null);
+    this._poseWrists(dt, pose);
+    this._ground();
     this._poseArms(dt, pose.dribble);
+    this._poseBalanceArms();
   }
 
-  // World position of a hand (side: +1 character right, -1 left).
+  // World position of a hand's palm centre (side: +1 character right, -1 left),
+  // from the final hand bone: the hand colliders and the ball contact use this.
   getHandWorld(side, out) {
     this.root.updateMatrixWorld(true);
     const arm = this.arms.find((a) => a.side === -side);
-    return arm.elbow.localToWorld(out.set(0, -ARM_L2, 0));
+    return arm.hand.localToWorld(out.copy(this.rig.handCenter));
+  }
+
+  // ---- adapter layers ---------------------------------------------------------------
+
+  // The torso lean/twist the pose layers set on the lower spine is spread up
+  // the spine (a curve instead of one hinge at the waist).
+  _spreadSpine() {
+    const t = this.torso.rotation, x = t.x, y = t.y, z = t.z;
+    t.set(x * 0.5, y * 0.4, z * 0.5);
+    this.spineUpper.rotation.set(x * 0.28, y * 0.3, z * 0.25);
+    this.chest.rotation.set(x * 0.22, y * 0.3, z * 0.25);
+  }
+
+  // Floor contact: the lowest contact point (heel / ball of foot / toe of either
+  // shoe, or the seat when sitting on the floor) goes exactly to the current
+  // jump height. Poses only bend joints; this decides the body height, so
+  // planted feet neither float nor sink.
+  _ground() {
+    this.root.updateMatrixWorld(true);
+    const v = this._v;
+    let low = Infinity, flat = Infinity;
+    for (const leg of this.legs) {
+      for (const p of SOLE_POINTS) low = Math.min(low, leg.ankle.localToWorld(v.set(p[0], p[1], p[2])).y);
+      flat = Math.min(flat, leg.ankle.getWorldPosition(v).y + SOLE_POINTS[0][1]);
+    }
+    low = Math.min(low, this.hips.localToWorld(v.set(0, SEAT_Y, 0)).y);
+    // In the air the jump height is measured flat-footed (pointed toes hang
+    // below it), exactly like the gameplay jump arc.
+    const air = smoothstep(0.005, 0.05, this._airY);
+    let dy = this.root.position.y + this._airY - lerp(low, flat, air);
+    if (low + dy < this.root.position.y) dy = this.root.position.y - low;   // never through the floor
+    this.body.position.y += dy;
+  }
+
+  // ---- balance layer: steal reach + ankle-break reactions (defender) ----------------
+  // b: { reach: { side (+1 right), extent 0..1, dir (world) } | null,
+  //      reaction: { level 1..3, t, duration, dir (world, where the weight went) } | null,
+  //      opponent: world position of the ball handler | null }
+  // Everything is expressed through the skeleton: spine lean/twist, clavicles,
+  // stepping legs, arms. Nothing tips the whole character as a rigid object.
+  _poseBalance(dt, b) {
+    const k = dt > 0 ? 1 - Math.exp(-16 * dt) : 1;
+    const reach = b && b.reach, rx = b && b.reaction;
+    this._reachW += ((reach ? reach.extent : 0) - this._reachW) * k;
+    this._armOv = null;
+    if (rx) { this._rx.level = rx.level; this._rx.u = Math.min(1, rx.t / rx.duration); this._rx.dir = this._toLocal(rx.dir, this._rx.dirL || (this._rx.dirL = new THREE.Vector3())); }
+    if (this._reachW < 0.003 && !rx) return;
+    // room in front: never lean into the ball handler's body
+    let room = 1, ox = 0, oz = 0;
+    if (b && b.opponent) {
+      const o = this._toLocal(this._w.set(b.opponent.x - this.root.position.x, 0, b.opponent.z - this.root.position.z), this._w);
+      const gap = Math.hypot(o.x, o.z);
+      if (gap > 1e-3) { ox = o.x / gap; oz = o.z / gap; room = clamp((gap - 0.82) / 0.5, 0, 1); }
+    }
+    const lean = { pitch: 0, roll: 0 };
+    if (this._reachW > 0.003) this._poseReach(reach ? reach.side : this._reachSide || 1, this._reachW, lean, reach ? this._toLocal(reach.dir, this._reachDir || (this._reachDir = new THREE.Vector3())) : this._reachDir);
+    if (rx) {
+      if (rx.level === 1) this._poseStumble(this._rx.u, this._rx.dir, lean);
+      else if (rx.level === 2) this._poseStagger(this._rx.u, this._rx.dir, lean);
+      else this._poseFall(this._rx.u, this._rx.dir, lean);
+    }
+    // limit the part of the lean that goes toward the ball handler
+    // (the top of the body moves along (-roll, pitch) in local x/z)
+    const toward = lean.pitch * oz - lean.roll * ox;
+    if (toward > 0 && room < 1) {
+      const cut = toward * (1 - room);
+      lean.pitch -= cut * oz; lean.roll += cut * ox;
+    }
+    this.torso.rotation.x += lean.pitch * 0.45; this.spineUpper.rotation.x += lean.pitch * 0.3; this.chest.rotation.x += lean.pitch * 0.25;
+    this.torso.rotation.z += lean.roll * 0.45; this.spineUpper.rotation.z += lean.roll * 0.3; this.chest.rotation.z += lean.roll * 0.25;
+  }
+
+  _toLocal(w, out) {
+    const f = this.root.rotation.y, c = Math.cos(f), s = Math.sin(f);
+    return out.set(w.x * c - w.z * s, 0, w.x * s + w.z * c);
+  }
+
+  // Steal reach: shoulder, upper arm, forearm, hand (IK onto the ball, from the
+  // defender), chest turning into it, clavicle reaching forward, weight down
+  // onto the front foot.
+  _poseReach(side, e, lean, dir) {
+    this._reachSide = side;
+    const armSide = -side;                                  // local x of the reaching arm
+    const arm = this.arms.find((a) => a.side === armSide);
+    this.spineUpper.rotation.y += side * 0.2 * e;
+    this.chest.rotation.y += side * 0.2 * e;
+    arm.clavicle.rotation.y += side * 0.32 * e;             // shoulder forward
+    arm.clavicle.rotation.z += armSide * 0.1 * e;           // and a little up
+    // lean toward the ball (forward and/or sideways), plus a little into the reaching side
+    const dx = dir ? dir.x : 0, dz = dir ? dir.z : 1;
+    lean.pitch += REACH.pitch * e * Math.max(0.3, dz);
+    lean.roll += (-dx * REACH.pitch + side * REACH.roll) * e;
+    const front = this.legs.find((l) => l.side === armSide), back = this.legs.find((l) => l.side !== armSide);
+    // weight down and onto the front foot (the floor pass lowers the body as the knees bend)
+    front.hip.rotation.x -= REACH.frontHip * e; front.knee.rotation.x += REACH.frontKnee * e; front.ankle.rotation.x -= 0.1 * e;
+    back.hip.rotation.x += 0.05 * e; back.knee.rotation.x += REACH.backKnee * e;
+    this.body.position.z += REACH.forward * e;
+    this.body.position.x += -side * 0.04 * e;
+  }
+
+  // Shift the hips (local x/z) while the planted feet stay put: the legs angle
+  // back under the pelvis.
+  _shiftHips(dx, dz) {
+    this.body.position.x += dx; this.body.position.z += dz;
+    for (const l of this.legs) { l.hip.rotation.z -= dx / 0.85; l.hip.rotation.x += dz / 0.85; }
+  }
+
+  // Step a leg's foot toward local (dx, dz) (meters, roughly) and bend it.
+  _stepLeg(leg, dx, dz, bend) {
+    leg.hip.rotation.z += dx / 0.85;
+    leg.hip.rotation.x -= dz / 0.85 + bend * 0.5;
+    leg.knee.rotation.x += bend;
+    leg.ankle.rotation.x -= bend * 0.5;
+  }
+
+  // LEVEL 1 stumble (~0.3 s): the weight gets away a little; one quick catch
+  // step toward it, the far arm comes out, then back to stance.
+  _poseStumble(u, d, lean) {
+    const env = Math.sin(Math.PI * u);
+    this._shiftHips(d.x * 0.08 * env, d.z * 0.08 * env);
+    lean.pitch += d.z * 0.22 * env; lean.roll += -d.x * 0.22 * env;
+    const lead = this._leadLeg(d);
+    this._stepLeg(lead, d.x * 0.16 * env, d.z * 0.16 * env, 0.3 * env);
+    for (const l of this.legs) l.knee.rotation.x += 0.12 * env;
+    const far = this.arms.find((a) => a.side * d.x < 0) || this.arms[1];
+    this._armOv = [{ arm: far, w: 0.75 * env, sx: -0.3, sz: far.side * 0.95, el: -0.5 }];
+    this.head.rotation.z += d.x * 0.15 * env;
+  }
+
+  // LEVEL 2 major stagger (~0.66 s): the base is lost — hips carried the wrong
+  // way, the trail foot crosses over, a wide catch step, arms out for balance,
+  // then the stance comes back.
+  _poseStagger(u, d, lean) {
+    const env = smoothstep(0, 0.12, u) * (1 - smoothstep(0.7, 1, u));
+    const carry = 0.17 * bellCurve(u, 0, 0.75);
+    this._shiftHips(d.x * carry, d.z * carry);
+    lean.pitch += d.z * (0.42 * bellCurve(u, 0, 0.5) - 0.14 * bellCurve(u, 0.4, 0.85));
+    lean.roll += -d.x * (0.42 * bellCurve(u, 0, 0.5) - 0.14 * bellCurve(u, 0.4, 0.85));
+    const lead = this._leadLeg(d), trail = lead === this.legs[0] ? this.legs[1] : this.legs[0];
+    const cross = bellCurve(u, 0.04, 0.42), katch = bellCurve(u, 0.28, 0.78);
+    // trail foot crosses in front toward the weight; then the lead foot catches wide
+    this._stepLeg(trail, d.x * 0.3 * cross, d.z * 0.3 * cross + 0.12 * cross, 0.35 * cross);
+    this._stepLeg(lead, d.x * 0.34 * katch, d.z * 0.34 * katch, 0.55 * katch);
+    for (const l of this.legs) { l.knee.rotation.x += 0.3 * env; l.hip.rotation.x -= 0.15 * env; }
+    this.hips.rotation.y += -d.x * 0.25 * env;
+    // arms out, circling for balance
+    const wob = Math.sin(u * 15) * 0.35;
+    this._armOv = this.arms.map((a) => ({ arm: a, w: env, sx: -0.5 + wob * a.side, sz: a.side * (1.15 + 0.2 * Math.sin(u * 11 + a.side)), el: -0.45 }));
+    this.head.rotation.z += d.x * 0.2 * env; this.head.rotation.x -= 0.15 * env;
+  }
+
+  // LEVEL 3 fall (~1.05 s): lose it, sit down hard toward where the weight was
+  // going (the body turns its back to that side), a brief moment on the floor
+  // with the hands down behind, then tuck the feet under, push up and stand
+  // back into the stance. The floor pass keeps the seat/feet on the floor.
+  _poseFall(u, d, lean) {
+    const back = d.z <= 0.6;                    // sit back (the usual) or go forward onto the knees
+    const yaw = back ? Math.atan2(-d.x, -d.z) : Math.atan2(d.x, d.z);
+    const yw = smoothstep(0.04, 0.3, u) * (1 - smoothstep(0.84, 1, u));
+    this.body.rotation.y += yaw * yw;
+    const k = sampleKeys(back ? FALL_BACK_KEYS : FALL_FWD_KEYS, u);
+    const w = smoothstep(0, 0.08, u) * (1 - smoothstep(0.93, 1, u));
+    for (const l of this.legs) {
+      const spread = l.side * k[4];
+      l.hip.rotation.x = lerp(l.hip.rotation.x, k[1] + (l === this.legs[0] ? k[5] : -k[5]), w);
+      l.hip.rotation.z = lerp(l.hip.rotation.z, spread, w);
+      l.knee.rotation.x = lerp(l.knee.rotation.x, k[2], w);
+      l.ankle.rotation.x = lerp(l.ankle.rotation.x, k[6], w);
+    }
+    // spine: pitch keyed in the turned frame (positive = over the feet)
+    lean.pitch += k[3] * w;
+    // hands: forward for balance, then down to the floor to catch the fall, then push
+    const floorW = k[7] * w;
+    if (floorW > 0.01) {
+      this.root.updateMatrixWorld(true);
+      const tgt = (a) => {
+        const p = this.hips.localToWorld(this._v.set(a.side * 0.24, 0, back ? -0.3 : 0.38));
+        p.y = this.root.position.y + 0.06;
+        return p.clone();
+      };
+      this._armOv = this.arms.map((a) => ({ arm: a, w: floorW, target: tgt(a) }));
+    } else if (k[8] > 0.01) {
+      this._armOv = this.arms.map((a) => ({ arm: a, w: k[8] * w, sx: -1.0, sz: a.side * 0.5, el: -0.6 }));
+    }
+    this.head.rotation.x += -0.2 * w * (back ? 1 : -0.5);
+  }
+
+  // The leg on the side the weight went (or the right leg for straight forward/back).
+  _leadLeg(d) {
+    if (Math.abs(d.x) < 0.25) return this.legs[0];
+    return this.legs.find((l) => l.side * d.x > 0);
+  }
+
+  // After the arm IK: reaction arms (balance, catching the fall) blend over it.
+  _poseBalanceArms() {
+    if (!this._armOv) return;
+    for (const o of this._armOv) {
+      if (o.w <= 0.001) continue;
+      const a = o.arm;
+      const q0 = this._qFree.copy(a.shoulder.quaternion), e0 = a.elbow.rotation.x;
+      if (o.target) this.solveArmIK(a, o.target);
+      else { a.shoulder.quaternion.setFromEuler(this._e.set(o.sx, 0, o.sz)); a.elbow.rotation.set(o.el, 0, 0); }
+      a.shoulder.quaternion.copy(q0.slerp(a.shoulder.quaternion, Math.min(1, o.w)));
+      a.elbow.rotation.x = lerp(e0, a.elbow.rotation.x, Math.min(1, o.w));
+    }
+  }
+
+  // Shooting hand: the wrist snaps through after the release and holds the
+  // follow-through until the landing; layups/dunks flick on the release too.
+  _poseWrists(dt, pose) {
+    let want = 0;
+    const sh = pose.shot;
+    if (sh && !sh.fake && sh.releasedAt !== null && sh.releasedAt !== undefined) {
+      this._relClock = (this._relClock ?? 0) + dt;
+      want = (1 - smoothstep(sh.land + 0.05, sh.end, sh.t)) * smoothstep(0, 0.08, this._relClock);
+    } else this._relClock = 0;
+    if (pose.finish && pose.finish.released) want = Math.max(want, 0.6 * (1 - smoothstep(pose.finish.land, pose.finish.end, pose.finish.t)));
+    this._wrist += (want - this._wrist) * (dt > 0 ? 1 - Math.exp(-30 * dt) : 1);
+    if (this._wrist < 0.002) return;
+    const shooting = this.arms[0];        // character right
+    shooting.hand.rotation.x = -0.95 * this._wrist;
   }
 
   // Jump shot legs/body. Keys are placed on the shot's own timeline:
@@ -293,6 +476,7 @@ ISO.PlayerModel = class {
     const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
     const grounded = reach(k[1] - 0.06, k[2]) + 0.0675 - 0.92;
     this.body.position.y = lerp(this.body.position.y, grounded + jumpY, w);
+    this._airY = lerp(this._airY, jumpY, w);
     this.torso.rotation.x = lerp(this.torso.rotation.x, k[3], w);
     this.torso.rotation.y = lerp(this.torso.rotation.y, 0.1, w);    // square up, shooting (right) shoulder slightly forward
     this.body.rotation.z = lerp(this.body.rotation.z, 0, w);
@@ -349,6 +533,7 @@ ISO.PlayerModel = class {
     const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
     const grounded = Math.max(reach(k[1], k[2]), reach(k[3], k[4])) + 0.0675 - 0.92;
     this.body.position.y = lerp(this.body.position.y, lerp(grounded, 0, air) + f.jumpY, w);
+    this._airY = lerp(this._airY, f.jumpY, w);
     this.body.position.x = lerp(this.body.position.x, 0, w);
     this.torso.rotation.x = lerp(this.torso.rotation.x, k[5], w);
     this.torso.rotation.y = lerp(this.torso.rotation.y, 0.12 * f.lead * air, w);
@@ -403,6 +588,7 @@ ISO.PlayerModel = class {
     }
     grounded += 0.0675 - 0.92;
     this.body.position.y = lerp(this.body.position.y, lerp(grounded, 0, jf) + (d.jumpY || 0), w);
+    this._airY = lerp(this._airY, d.jumpY || 0, w);
     this.body.position.x = lerp(this.body.position.x, 0, w);
     const lean = lerp(fw < -0.5 ? 0.18 : 0.3, 0.06, d.contest || 0);
     this.torso.rotation.x = lerp(this.torso.rotation.x, lean, w);
@@ -430,6 +616,7 @@ ISO.PlayerModel = class {
     }
     const hop = ISO.OFFENSE.sideStep.hopHeight * Math.sin(Math.PI * Math.min(1, u * 1.1));
     this.body.position.y = lerp(this.body.position.y, -0.1 - 0.05 * land + hop, w);
+    this._airY = lerp(this._airY, hop, w);
     this.body.rotation.z = lerp(this.body.rotation.z, side * 0.1 * reachOut, w);
     this.torso.rotation.x = lerp(this.torso.rotation.x, 0.2, w);
   }
@@ -515,6 +702,7 @@ ISO.PlayerModel = class {
     const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
     const grounded = Math.max(reach(k[1], k[2]), reach(k[3], k[4])) + 0.0675 - 0.92;
     this.body.position.y = lerp(this.body.position.y, grounded + k[6], w);
+    this._airY = lerp(this._airY, k[6], w);
     this.torso.rotation.x = lerp(this.torso.rotation.x, k[5], w);
   }
 
@@ -539,8 +727,8 @@ ISO.PlayerModel = class {
       // shoulder toward it a little (how real players reach for the rim).
       let shrugWant = 0;
       if (req && want > 0) {
-        const d = this.torso.worldToLocal(this._ik.d.copy(arm.ikTarget)).sub(arm.base);
-        const over = d.length() - (ARM_L1 + ARM_L2) * 0.97;
+        const d = arm.shoulder.parent.worldToLocal(this._ik.d.copy(arm.ikTarget)).sub(arm.base);
+        const over = d.length() - (this.L1 + this.L2) * 0.97;
         if (over > 0 && d.y > 0) shrugWant = Math.min(MAX_SHRUG, over) * (d.y / d.length());
       }
       arm.shrug += (shrugWant * arm.ikWeight - arm.shrug) * k;
@@ -556,15 +744,15 @@ ISO.PlayerModel = class {
   }
 
   // Point the arm chain so the hand center lands on `target` (world space).
-  // Exact two-bone solve in the shoulder's parent (torso) space: the elbow sits
+  // Exact two-bone solve in the shoulder's parent (clavicle) space: the elbow sits
   // in the plane of the target and a pole direction (back and out, like a real
   // elbow), then the shoulder's basis is built from that plane.
   solveArmIK(arm, target) {
-    const L1 = ARM_L1, L2 = ARM_L2; // shoulder->elbow, elbow->hand
+    const L1 = this.L1, L2 = this.L2; // shoulder->elbow, elbow->palm centre
     const v = this._ik;
     this.root.updateMatrixWorld(true);
 
-    const d = this.torso.worldToLocal(v.d.copy(target)).sub(arm.shoulder.position);
+    const d = arm.shoulder.parent.worldToLocal(v.d.copy(target)).sub(arm.shoulder.position);
     const D = Math.min(Math.max(d.length(), 0.1), L1 + L2 - 0.002);
     d.normalize();
 
@@ -596,8 +784,14 @@ ISO.PlayerModel = class {
   }
 };
 
-const ARM_L1 = 0.34, ARM_L2 = 0.32;   // upper arm, forearm (to the hand center)
 const MAX_SHRUG = 0.1;
+// Steal reach through the body (tuned so the reach covers the same ground as
+// the Step 15B reach did: same contact rates on the steal sweeps).
+const REACH = { pitch: 0.4, roll: 0.1, frontHip: 0.4, frontKnee: 0.5, backKnee: 0.3, forward: 0.09 };
+// Floor contact points: shoe sole (foot bone space: heel, ball, toe, both
+// edges) and the seat (hips bone space).
+const SOLE_POINTS = [[0, -0.0675, -0.085], [0.045, -0.0675, 0.1], [-0.045, -0.0675, 0.1], [0, -0.06, 0.2], [0.04, -0.0675, -0.05], [-0.04, -0.0675, -0.05]];
+const SEAT_Y = -0.15;
 const NO_BODY = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0, stride: 1, forward: 0 };
 // Finishes: [time key, driveHip, driveKnee, jumpHip, jumpKnee, torsoLean]
 // (drive leg = finishing-hand side; it lifts on one-foot takeoffs). Time keys
@@ -628,6 +822,28 @@ const FINISH_KEYS = {
     ['end',     -0.15, 0.30, -0.15, 0.30, 0.06,  0.00],
   ],
 };
+// Fall keys: [u, thigh, knee, spinePitch, legSpread, legScissor, foot, handsToFloor, armsForward]
+// (in the frame the body turned to; the floor pass sets the height)
+const FALL_BACK_KEYS = [
+  [0.00, -0.55, 1.05,  0.25, 0.13, 0.0,  -0.45, 0.0, 0.0],   // stance
+  [0.12, -0.30, 0.75,  0.45, 0.10, 0.18, -0.35, 0.0, 0.9],   // stumbling back, chest over the feet, arms forward
+  [0.28, -1.20, 1.95,  0.30, 0.16, 0.08, -0.65, 0.6, 0.3],   // sinking fast, hands go back for the floor
+  [0.42, -1.75, 0.45, -0.38, 0.2,  0.1,   0.25, 1.0, 0.0],   // seat hits the floor, legs out, leaning back on the hands
+  [0.62, -1.70, 0.55, -0.30, 0.2,  0.06,  0.2,  1.0, 0.0],   // down
+  [0.76, -1.90, 2.25,  0.55, 0.12, 0.0,  -0.4,  0.8, 0.0],   // feet tucked under, chest forward, push off the hands
+  [0.90, -0.85, 1.55,  0.35, 0.13, 0.0,  -0.6,  0.0, 0.2],   // rising through a crouch
+  [1.00, -0.55, 1.05,  0.25, 0.13, 0.0,  -0.45, 0.0, 0.0],   // defensive stance
+];
+const FALL_FWD_KEYS = [
+  [0.00, -0.55, 1.05,  0.25, 0.13, 0.0,  -0.45, 0.0, 0.0],
+  [0.14, -0.70, 1.05,  0.55, 0.12, 0.3,  -0.35, 0.0, 0.8],   // pitched forward, stepping to catch it
+  [0.32, -0.25, 1.95,  0.75, 0.14, 0.05, -0.2,  0.8, 0.2],   // down onto the knees, hands reaching
+  [0.48, -0.15, 2.05,  0.9,  0.14, 0.0,   0.5,  1.0, 0.0],   // knees and hands on the floor
+  [0.64, -0.15, 2.05,  0.85, 0.14, 0.0,   0.5,  1.0, 0.0],
+  [0.80, -1.20, 2.10,  0.6,  0.13, 0.25, -0.5,  0.5, 0.0],   // one foot up, push
+  [0.92, -0.75, 1.45,  0.35, 0.13, 0.0,  -0.6,  0.0, 0.1],
+  [1.00, -0.55, 1.05,  0.25, 0.13, 0.0,  -0.45, 0.0, 0.0],
+];
 //                 u     fHip   fKnee  bHip   bKnee  lean   hop
 const STEPBACK_KEYS = [
   [0.00, -0.40, 0.80, -0.40, 0.80, 0.22, 0.00],  // dribble stance

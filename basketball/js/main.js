@@ -49,8 +49,8 @@ ISO.Game = class {
     this.roster.addTeam(new ISO.Team(ISO.TEAM_A, GF.teams.A));
     this.roster.addTeam(new ISO.Team(ISO.TEAM_B, GF.teams.B));
     const mk = (id, teamId, name, control, look) => this.roster.addPlayer(new ISO.PlayerEntity({ id, teamId, name, controlSource: control, look, ball: this.ball, camera, keyboard: this.input }));
-    mk('P1', ISO.TEAM_A, 'Player 1', ISO.CONTROL.LOCAL, {});
-    if (ISO.DEFENSE.enabled) mk('P2', ISO.TEAM_B, 'Player 2', ISO.CONTROL.CPU, { jersey: 0x2f6fe0, trim: 0xf4f6fa, skin: 0x6b4428, shoes: 0x1b2333, number: '3' });
+    mk('P1', ISO.TEAM_A, 'Player 1', ISO.CONTROL.LOCAL, ISO.PLAYER_LOOKS.P1);
+    if (ISO.DEFENSE.enabled) mk('P2', ISO.TEAM_B, 'Player 2', ISO.CONTROL.CPU, ISO.PLAYER_LOOKS.P2);
     this.roster.buildDefense({ ball: this.ball, camera, events: this.events });
     for (const p of this.roster.players) {
       this.scene.add(p.object);
@@ -107,6 +107,9 @@ ISO.Game = class {
       if (this.roster.players[0].defense) this.defenseDebug = new ISO.DefenseDebug(this.scene, this.roster.players[0].defense, hud);
       this.possessionDebug = new ISO.PossessionDebug(this.possession, this.roster, this.scoring, hud, this);
     }
+    // ?rigdebug: skeleton + hand/foot/collider points; ?stress=N: visual-only extra players
+    if (ISO.RigDebug.enabled) this.rigDebug = new ISO.RigDebug(this);
+    if (ISO.RigStress.count > this.roster.players.length) this.rigStress = new ISO.RigStress(this, ISO.RigStress.count);
 
     // ?defenseplayer: start on defense (the CPU's team has the ball first).
     const first = ISO.DEFENSE.enabled && ISO.DEFENSE.playerControlsDefense ? ISO.TEAM_B : GF.firstPossession;
@@ -228,6 +231,8 @@ ISO.Game = class {
     if (this.defenseDebug && this.defender) this.defenseDebug.update();
     if (this.offenseDebug) this.offenseDebug.update();
     if (this.possessionDebug) this.possessionDebug.update();
+    if (this.rigDebug) this.rigDebug.update();
+    if (this.rigStress) this.rigStress.update(dt);
   }
 
   // Camera: frames the possession — ball handler + defender + basket, from

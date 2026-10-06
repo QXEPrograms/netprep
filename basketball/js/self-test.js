@@ -258,6 +258,26 @@ ISO.SelfTest = class {
     this.directions('offense after steal', { reset: () => this.place(0, 9.5, 2.6) });
   }
 
+  // Step 16: the rig contract, colliders on the visible hands, the shot timeline.
+  modelChecks() {
+    const g = this.g, P = this.P;
+    const M = this.me.model, names = ISO.CharacterRig.BONE_NAMES;
+    const rig2 = (() => { try { return ISO.CharacterRig.fromObject3D(M.character.mesh); } catch (e) { return null; } })();
+    this.check('rig: humanoid contract (21 bones, GLB-style adapter finds them)', names.length === 21 && names.every((n) => M.rig[n] && M.rig[n].isBone) && rig2 && rig2.dims.upperArm === M.rig.dims.upperArm, `${names.length} bones`);
+    this.check('rig: gameplay root is separate from the skeleton', M.root.isGroup && !M.root.isBone && M.rig.root.parent !== M.root, '');
+    // defender hand colliders sit on the visible hands
+    P.devReset('B'); this.live();
+    const d = this.me.defense; this.keyDown('KeyF'); this.step(20);
+    let off = 0; const v = new THREE.Vector3();
+    for (const h of d.blocks.hands) off = Math.max(off, d.model.getHandWorld(h.side, v).distanceTo(h.cur));
+    this.keyUp('KeyF');
+    this.check('hand colliders follow the visible hand bones', off <= ISO.DEFENSE.hands.fingerOffset + 0.005, `${(off * 100).toFixed(1)} cm`);
+    // jump shot: ball out at the jump's peak, ~600 ms after the press; tap = pump fake
+    const s = this.me.offense.shooting.settings, out = s.idealRelease + s.extendTime, peak = s.takeoff + s.airTime / 2;
+    this.check('jump shot: release ~0.6 s, at the top of the jump', out > 0.53 && out < 0.62 && Math.abs(out - peak) < 0.03, `ball out ${(out * 1000).toFixed(0)} ms, peak ${(peak * 1000).toFixed(0)} ms`);
+    this.check('jump shot: a tap is still a pump fake', s.fakeThreshold < s.gatherTime && s.fakeThreshold >= 0.12, `fake < ${s.fakeThreshold * 1000} ms`);
+  }
+
   run() {
     const g = this.g, P = this.P, rules = ISO.GAMEFLOW.rules, target = rules.targetScore;
     this.bot(false);
@@ -352,6 +372,9 @@ ISO.SelfTest = class {
 
     // ---- 5. steals, balance, ankle breaks, rim protection --------------------------
     this.interactions();
+
+    // ---- 6. Player Model V2 rig + faster release -----------------------------------
+    this.modelChecks();
 
     rules.targetScore = target;
     ISO.DEFENSE.steal.cpuChance = cpuChance;

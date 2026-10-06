@@ -42,9 +42,9 @@ ISO.HandCollider = class {
 
   // After the model has been posed this frame.
   sync(dt, active) {
+    // from the final hand bone (the visible palm), a little past it along the forearm
     const arm = this.model.arms.find((a) => a.side === -this.side);
-    this.model.root.updateMatrixWorld(true);
-    const hand = arm.elbow.localToWorld(this._a.set(0, -0.32, 0));
+    const hand = this.model.getHandWorld(this.side, this._a);
     const elbow = arm.elbow.getWorldPosition(this._b);
     const dir = hand.clone().sub(elbow).normalize();
     const p = hand.addScaledVector(dir, ISO.DEFENSE.hands.fingerOffset);

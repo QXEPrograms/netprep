@@ -73,7 +73,7 @@ ISO.PlayerEntity = class {
     this.controlSource = null;
     this.setControlSource(controlSource || ISO.CONTROL.CPU);
 
-    this.model = new ISO.PlayerModel(look || {});
+    this.model = new ISO.PlayerModel(Object.assign({ teamId, playerId: id }, look || {}));
     this.offense = new ISO.PlayerController({
       input: this.input, camera, ball, model: this.model, playerId: id,
       startPosition: new THREE.Vector3(0, 0, 9), startFacing: Math.PI,

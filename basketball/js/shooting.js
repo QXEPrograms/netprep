@@ -40,16 +40,20 @@ ISO.ShootingSystem = class {
     const H = ISO.CONFIG.hoop;
     this.ball = ball;
     this.settings = Object.assign({
+      // Step 16: the release is ~12% quicker than before (press -> ball out
+      // 683 -> ~600 ms). The time came out of the gather, the dip before the
+      // jump and the ball's raise; the jump, the arm extension, the green
+      // window and the follow-through are unchanged.
       fakeThreshold: 0.14,    // release Space before this = pump fake
-      gatherTime: 0.2,
-      takeoff: 0.36,
+      gatherTime: 0.16,       // was 0.2
+      takeoff: 0.3,           // was 0.36
       airTime: 0.56,          // jump length (≈ 0.38 m high)
-      raiseStart: 0.24,       // ball starts rising from the pocket
-      setReached: 0.5,        // ball is up at the set point; earliest the arm can extend
+      raiseStart: 0.19,       // ball starts rising from the pocket (was 0.24)
+      setReached: 0.43,       // ball is up at the set point; earliest the arm can extend (was 0.5)
       extendTime: 0.07,       // arm extension before the ball leaves the hand
-      autoRelease: 0.8,       // holding longer than this releases automatically
+      autoRelease: 0.72,      // holding longer than this releases automatically (was 0.8)
 
-      idealRelease: 0.58,     // perfect moment to let go (ball leaves at the jump's peak)
+      idealRelease: 0.498,    // perfect moment to let go: the ball leaves at the jump's peak (was 0.58)
       greenHalfWindow: 0.02,  // ±20 ms = GREEN
       nearWindow: 0.07,       // up to 70 ms outside green = EARLY / LATE, beyond = VERY
 
@@ -356,7 +360,8 @@ ISO.ShootingSystem = class {
     }
     if (!this.isShooting) return null;
     const t = this.shotTime;
-    const pose = { t, gatherEnd: s.gatherTime, takeoff: s.takeoff, land: s.land, end: s.end, jumpY: this.jumpHeight(t) };
+    const pose = { t, gatherEnd: s.gatherTime, takeoff: s.takeoff, land: s.land, end: s.end, jumpY: this.jumpHeight(t),
+      releasedAt: this.ballReleased ? this._releaseT : null };
     if (this.pre > 0 && t < 0.12) pose.hop = { u: Math.min(1, this.t / this.pre), side: this._hopSide };
     return pose;
   }

@@ -67,3 +67,32 @@ ISO.GAMEFLOW = {
   // game your input belongs to YOUR player, offense or defense.
   devControlBallHandler: /[?&]controlball\b/.test(window.location.search),
 };
+
+// Player looks (Player Model V2, character-rig.js). Per player: number, skin,
+// uniform, shoes, hair, accessories. The team colour stays the jersey colour.
+ISO.PLAYER_LOOKS = {
+  P1: {
+    jerseyNumber: '7',
+    appearance: {
+      skinTone: 0x8d5a3b,
+      jersey: { primary: 0xf26b1d, secondary: 0x1d3a5f, accent: 0xffffff },
+      shorts: { primary: 0xf26b1d, secondary: 0x1d3a5f },
+      shoes: { upper: 0xf4f4f4, sole: 0x24262b, accent: 0xf26b1d },
+      socks: 0xffffff,
+      hair: { style: 'fade', color: 0x16100c },
+      accessories: { headband: 0xffffff, wristbands: 0xffffff },
+    },
+  },
+  P2: {
+    jerseyNumber: '3',
+    appearance: {
+      skinTone: 0x5e3a22,
+      jersey: { primary: 0x2f6fe0, secondary: 0xf4f6fa, accent: 0x0f1d3a },
+      shorts: { primary: 0x2f6fe0, secondary: 0xf4f6fa },
+      shoes: { upper: 0x1b2333, sole: 0xeeeeee, accent: 0x2f6fe0 },
+      socks: 0x1b2333,
+      hair: { style: 'twists', color: 0x120c08 },
+      accessories: { headband: null, wristbands: 0x0f1d3a },
+    },
+  },
+};
