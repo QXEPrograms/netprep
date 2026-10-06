@@ -67,6 +67,7 @@ ISO.HoopPhysics = class {
     this.boardContacts = 0;            // backboard impacts this flight
     this.basketCount = 0;              // total baskets detected
     this.onBasket = null;              // optional callback({ swish })
+    this.onRimHit = null;              // optional callback(strength, normal) when the ball first touches the rim
 
     this._entered = false;
     this._voided = false;
@@ -113,7 +114,10 @@ ISO.HoopPhysics = class {
         d.divideScalar(dist);
         this._resolve(ball, d, minDist - dist, this.materials.rim);
         this.shotTouchedRim = true;
-        if (!this._rimTouching) this.rimContacts++;
+        if (!this._rimTouching) {
+          this.rimContacts++;
+          if (this.onRimHit) this.onRimHit(Math.abs(ball.velocity.dot(d)) + 1, d);
+        }
         rimNow = true;
       }
     }
@@ -185,15 +189,32 @@ ISO.HoopPhysics = class {
     }
   }
 
-  // Inside the net (just below the rim) the ball is gently slowed.
+  // Inside the net the ball is slowed and funneled: the net narrows toward the
+  // bottom, so a ball coming through is guided toward the middle and out the
+  // bottom instead of through the side. This only acts below the lower
+  // detection plane (after a basket has been decided), so it never changes a
+  // make or a miss.
   netDrag(ball, h) {
-    const p = ball.position, c = this.rimCenter;
-    if (p.y > c.y || p.y < c.y - 0.45) return;
-    if (Math.hypot(p.x - c.x, p.z - c.z) > H.rimRadius) return;
-    const fh = Math.exp(-5 * h), fv = Math.exp(-1.2 * h);
-    ball.velocity.x *= fh;
-    ball.velocity.z *= fh;
-    if (ball.velocity.y < 0) ball.velocity.y *= fv;
+    const p = ball.position, c = this.rimCenter, v = ball.velocity;
+    if (p.y > c.y || p.y < c.y - 0.5) return;
+    const qx = p.x - c.x, qz = p.z - c.z, q = Math.hypot(qx, qz);
+    if (q > H.rimRadius + 0.02) return;           // outside the hoop: not in the net
+    const fh = Math.exp(-6 * h), fv = Math.exp(-1.2 * h);
+    v.x *= fh;
+    v.z *= fh;
+    if (v.y < 0) v.y *= fv;
+
+    if (p.y > this.lowerPlaneY - 0.01 || v.y >= 0) return;   // only a ball coming down through
+    const t = Math.min(1, (c.y - p.y) / 0.44);
+    const netR = H.rimRadius + (H.rimRadius * 0.48 - H.rimRadius) * (1 - (1 - t) * (1 - t));
+    const allowed = Math.max(0.03, netR + 0.06 - ball.radius);   // the mesh stretches a little
+    if (q > allowed && q > 1e-6) {
+      const ux = qx / q, uz = qz / q;
+      p.x = c.x + ux * allowed;
+      p.z = c.z + uz * allowed;
+      const out = v.x * ux + v.z * uz;
+      if (out > 0) { v.x -= ux * out * 1.15; v.z -= uz * out * 1.15; }
+    }
   }
 
   // Impulse response for a contact with outward normal n and penetration pen.

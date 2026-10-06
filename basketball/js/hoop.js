@@ -154,82 +154,8 @@ ISO.Hoop = (function () {
     return g;
   }
 
-  // Simple diamond-mesh net built from line segments. `sway` lets later steps
-  // animate it (e.g. when the ball goes through).
   function buildNet() {
-    const strands = 12;
-    const rows = 6;
-    const topR = H.rimRadius, botR = H.rimRadius * 0.58;
-    const depth = 0.42;
-
-    const rest = [];      // rest positions per row/strand
-    for (let r = 0; r <= rows; r++) {
-      const t = r / rows;
-      const radius = topR + (botR - topR) * t;
-      const y = -t * depth;
-      const offset = (r % 2) * (Math.PI / strands);
-      const ring = [];
-      for (let s = 0; s < strands; s++) {
-        const a = (s / strands) * Math.PI * 2 + offset;
-        ring.push(new THREE.Vector3(Math.cos(a) * radius, y, Math.sin(a) * radius));
-      }
-      rest.push(ring);
-    }
-
-    // Each node connects to the two nearest nodes in the next row -> diamond pattern.
-    const pairs = [];
-    for (let r = 0; r < rows; r++) {
-      const odd = r % 2 === 1;
-      for (let s = 0; s < strands; s++) {
-        const a = [r, s];
-        const b1 = [r + 1, s];
-        const b2 = [r + 1, odd ? (s + 1) % strands : (s - 1 + strands) % strands];
-        pairs.push([a, b1], [a, b2]);
-      }
-    }
-    // bottom ring
-    for (let s = 0; s < strands; s++) pairs.push([[rows, s], [rows, (s + 1) % strands]]);
-
-    const positions = new Float32Array(pairs.length * 6);
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
-    const lines = new THREE.LineSegments(geo, mat);
-    lines.position.set(0, H.rimHeight - 0.01, H.centerZ);
-    lines.frustumCulled = false;
-    lines.name = 'net';
-
-    const tmp = new THREE.Vector3();
-    const net = {
-      object: lines,
-      sway: 0,        // 0..1 impulse, decays over time
-      time: 0,
-      // Ball went through: a cleaner make (swish) gives a stronger pull.
-      pulse(strength) {
-        this.sway = Math.max(this.sway, strength);
-      },
-      update(dt) {
-        this.time += dt;
-        this.sway *= Math.exp(-dt * 3);
-        let i = 0;
-        for (const [[ra, sa], [rb, sb]] of pairs) {
-          deform(rest[ra][sa], ra, this, tmp); positions[i++] = tmp.x; positions[i++] = tmp.y; positions[i++] = tmp.z;
-          deform(rest[rb][sb], rb, this, tmp); positions[i++] = tmp.x; positions[i++] = tmp.y; positions[i++] = tmp.z;
-        }
-        geo.attributes.position.needsUpdate = true;
-      },
-    };
-
-    function deform(p, row, n, out) {
-      const t = row / rows;
-      const idle = Math.sin(n.time * 1.7 + p.x * 6) * 0.004 * t;
-      const k = n.sway * t;
-      const wobble = Math.sin(n.time * 14) * k;
-      out.set(p.x * (1 - 0.25 * k) + idle + wobble * 0.03, p.y * (1 + 0.35 * k), p.z * (1 - 0.25 * k));
-    }
-
-    net.update(0);
-    return net;
+    return new ISO.Net();
   }
 
   return { build };

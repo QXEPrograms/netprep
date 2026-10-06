@@ -22,6 +22,8 @@ ISO.Locomotion = class {
     this.sprinting = false;
     // Multiplier hook so later systems (dribbling, shooting) can slow the player down.
     this.speedScale = 1;
+    // Multiplier on acceleration/braking (e.g. a sharp burst right after a crossover).
+    this.accelScale = 1;
     // Optional temporary control by a move (e.g. a step-back):
     //   { velocity: Vector3, weight: 0..1, facing: yaw }
     // weight blends the normal velocity toward drive.velocity (1 = fully driven);
@@ -54,7 +56,7 @@ ISO.Locomotion = class {
     if (dvLen > 0) {
       // Braking (desired opposes current motion) uses the stronger decel rate.
       const opposing = this.velocity.x * this._desired.x + this.velocity.z * this._desired.z < 0;
-      const rate = (hasInput && !opposing) ? s.accel : s.decel;
+      const rate = ((hasInput && !opposing) ? s.accel : s.decel) * this.accelScale;
       const step = Math.min(dvLen, rate * dt);
       this.velocity.x += (dvx / dvLen) * step;
       this.velocity.z += (dvz / dvLen) * step;

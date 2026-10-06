@@ -19,7 +19,9 @@
 //
 // State useful to other systems (e.g. a defender reading moves):
 //   hand, isCrossingOver, crossoverDirection, crossoverProgress,
-//   crossoverCompleted, crossoverCount, crossoverWorldDir
+//   crossoverCompleted, crossoverCount, crossoverWorldDir,
+//   crossoverFakeDirection / crossoverFakeWorldDir (the body fake goes this way
+//   first), crossoverBurst (sharp-acceleration window after the ball crosses)
 (function () {
 const MODES = { DRIBBLE: 'dribble', CROSSOVER: 'crossover' };
 
@@ -45,13 +47,15 @@ ISO.DribbleController = class {
       handAbove: 0.015,                 // palm clearance above the ball's top
 
       // Crossover
-      xDuration: 0.4,                   // seconds from push to catch
-      xBounceAt: 0.45,                  // fraction of the move when the ball hits the floor
-      xBounceForward: 0.58,             // how far in front of the body it bounces (clears the legs)
-      xImpactSpeed: 4.2,                // m/s downward at the bounce (a hard, low push)
-      xReboundSpeed: 3.6,               // m/s upward leaving the floor
-      xCooldown: 0.18,                  // seconds after a crossover before another can start
-      xSpeedScale: 0.9,                 // movement speed multiplier while crossing over
+      xDuration: 0.3,                   // seconds from push to catch
+      xBounceAt: 0.38,                  // fraction of the move when the ball hits the floor
+      xBounceForward: 0.56,             // how far in front of the body it bounces (clears the legs)
+      xImpactSpeed: 6.0,                // m/s downward at the bounce (a hard, low push)
+      xReboundSpeed: 4.5,               // m/s upward leaving the floor
+      xOvershoot: 0.13,                 // catch carries this far (fraction) past the hand spot
+      xCooldown: 0.12,                  // seconds after a crossover before another can start
+      xSpeedScale: 0.92,                // top-speed multiplier during the push
+      xBurstTime: 0.3,                  // after the ball crosses: sharper acceleration (not more speed)
     };
 
     // Public crossover state (read-only for other systems).
@@ -61,6 +65,10 @@ ISO.DribbleController = class {
     this.crossoverCompleted = false;    // true only on the frame a crossover finishes
     this.crossoverCount = 0;
     this.crossoverWorldDir = new THREE.Vector3();
+    // The body sells the opposite way first: +1 = fakes toward the right.
+    this.crossoverFakeDirection = 0;
+    this.crossoverFakeWorldDir = new THREE.Vector3();
+    this.crossoverBurst = 0;            // 1..0 sharp-acceleration window right after the ball crosses
     this.cooldown = 0;
     // Scales the velocity lead. Moves that travel backward (step-back) set this
     // to 0 so the ball stays in front instead of trailing behind the body.
@@ -71,7 +79,7 @@ ISO.DribbleController = class {
       { side: 1, target: new THREE.Vector3(), weight: 1 },
       { side: -1, target: new THREE.Vector3(), weight: 0 },
     ];
-    this.body = { crouch: 0, twist: 0, roll: 0 };
+    this.body = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0 };
 
     this._ballPos = new THREE.Vector3();
     this._fwd = new THREE.Vector3();
@@ -125,6 +133,12 @@ ISO.DribbleController = class {
     if (!this.active) return;
     const s = this.settings;
     this.cooldown = Math.max(0, this.cooldown - dt);
+    this._burstT = Math.max(0, (this._burstT || 0) - dt);
+    if (this.isCrossingOver && this.crossoverProgress >= this.settings.xBounceAt && !this._x.burst) {
+      this._x.burst = true;
+      this._burstT = this.settings.xBurstTime;
+    }
+    this.crossoverBurst = this._burstT / this.settings.xBurstTime;
 
     // How "fast" we're going, as smooth 0..1 blends. Smoothed because speed can
     // change in a single frame (e.g. running into a wall), which would otherwise
@@ -195,6 +209,8 @@ ISO.DribbleController = class {
     this.body.crouch = 0;
     this.body.twist = 0.06 * this.sideSign; // shoulders turn slightly over the ball
     this.body.roll = 0;
+    this.body.sway = 0;
+    this.body.jab = 0;
   }
 
   // ---- crossover -------------------------------------------------------------
@@ -221,6 +237,7 @@ ISO.DribbleController = class {
     this.mode = MODES.CROSSOVER;
     this.isCrossingOver = true;
     this.crossoverDirection = -from;
+    this.crossoverFakeDirection = from;
     this.crossoverProgress = 0;
     this.crossoverWorldDir.copy(this._right).multiplyScalar(-from);
   }
@@ -233,15 +250,16 @@ ISO.DribbleController = class {
     const u = Math.min(1, x.t / s.xDuration);
     this.crossoverProgress = u;
     this.crossoverWorldDir.copy(this._right).multiplyScalar(-x.from);
+    this.crossoverFakeWorldDir.copy(this._right).multiplyScalar(x.from);
 
     const to = -x.from;
     const lat1 = s.side * to;
     const fwd1 = this._forward();
     const uc = s.xBounceAt;
 
-    // Height: a hard push down to the floor, then a rebound into the other hand.
-    // Cubic Hermite segments keep the motion continuous with whatever the ball
-    // was doing when the move started.
+    // Height: a hard, fast push down to the floor, then a rebound into the
+    // other hand. Cubic Hermite segments keep the motion continuous with
+    // whatever the ball was doing when the move started.
     let y;
     if (u < uc) {
       const v = u / uc, T = s.xDuration * uc;
@@ -252,38 +270,44 @@ ISO.DribbleController = class {
     }
     y = Math.max(r, y);
 
-    // Horizontal: one smooth sweep across the front, bulging forward so the
-    // ball bounces well in front of the feet. The bulge peaks at the bounce.
-    const e = smootherstep(u);
-    const lat = lerp(x.lat0, lat1, e);
-    const w = u < uc ? 0.5 * u / uc : 0.5 + 0.5 * (u - uc) / (1 - uc);
+    // Sideways: the ball crosses mostly while it's low (around the bounce),
+    // carries a little past the receiving hand, then settles into it.
+    const e = smoothstep(uc - 0.3, uc + 0.28, u);
+    const after = clamp01((u - uc) / (1 - uc));
+    const lat = lerp(x.lat0, lat1, e) + lat1 * s.xOvershoot * Math.sin(Math.PI * after);
+    // Forward: bulges out so the ball bounces well in front of the feet.
+    const w = u < uc ? 0.5 * u / uc : 0.5 + 0.5 * after;
     const bounceFwd = s.xBounceForward + 0.1 * this._runAmt;
     const fwd = lerp(x.fwd0, fwd1, e) + Math.max(0, bounceFwd - lerp(x.fwd0, fwd1, 0.5)) * Math.sin(Math.PI * w);
     const floorness = clamp01(1 - (y - r) / Math.max(0.05, this.top - r));
     this._toWorld(mover, lat, fwd, y, floorness, this._ballPos);
     this.ball.place(this._ballPos, dt);
 
-    // Passing hand pushes the ball down and across, then lets go.
+    // Passing hand slaps the ball down and across, then lets go early.
     const handLow = this._handLow();
     const fromHand = this._hand(x.from);
     fromHand.target.copy(this._ballPos);
     fromHand.target.y = Math.max(handLow, y + r + s.handAbove);
-    fromHand.weight = 1 - smoothstep(0.18, 0.5, u);
+    fromHand.weight = 1 - smoothstep(0.15, 0.42, u);
 
-    // Receiving hand reaches out to the far side, waits above the catch spot,
-    // then rides the ball up.
+    // Receiving hand is already out wide waiting over the catch spot, then
+    // rides the ball up into the dribble.
     const toHand = this._hand(to);
-    const catchPt = this._toWorld(mover, lat1, fwd1, 0, 0, this._tmp);
+    const catchPt = this._toWorld(mover, lat1 * (1 + s.xOvershoot * 0.6), fwd1, 0, 0, this._tmp);
     toHand.target.lerpVectors(this._ballPos, catchPt, u < uc ? 1 : floorness);
     toHand.target.y = Math.max(handLow, y + r + s.handAbove);
-    toHand.weight = smoothstep(0.12, 0.45, u);
+    toHand.weight = smoothstep(0.05, 0.32, u);
 
-    // Upper body: dip lower, shoulders follow the ball, weight shifts toward
-    // the receiving side.
-    const arc = Math.sin(Math.PI * u);
-    this.body.crouch = arc;
-    this.body.twist = lerp(0.06 * x.from, 0.06 * to, e) + 0.12 * to * arc;
-    this.body.roll = 0.1 * to * arc;
+    // Body: sell the fake toward the ball side (shoulder, lean, hips and a
+    // jab step), then whip the weight over to the receiving side. Every curve
+    // returns to the normal dribble values at the end so nothing snaps.
+    const fake = bell(u, 0, 0.36);          // early: toward the ball side
+    const shift = bell(u, 0.25, 1.0);       // later: toward the new side
+    this.body.crouch = 1.3 * Math.sin(Math.PI * u);
+    this.body.twist = lerp(0.06 * x.from, 0.06 * to, e) + 0.2 * x.from * fake + 0.18 * to * shift;
+    this.body.roll = 0.12 * x.from * fake + 0.14 * to * shift;
+    this.body.sway = 0.07 * x.from * fake + 0.1 * to * shift;   // hips, meters (+ = character right)
+    this.body.jab = x.from * bell(u, 0.02, 0.4);                // ball-side foot jabs out
 
     if (u >= 1) this._finishCrossover();
   }
@@ -352,7 +376,8 @@ ISO.DribbleController = class {
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 function smoothstep(a, b, v) { const t = clamp01((v - a) / (b - a)); return t * t * (3 - 2 * t); }
-function smootherstep(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+// 0 -> 1 -> 0 hump between a and b.
+function bell(v, a, b) { const t = clamp01((v - a) / (b - a)); return Math.sin(Math.PI * t) ** 2; }
 // Cubic Hermite: p0 -> p1 with end tangents m0, m1 (already scaled by duration).
 function hermite(p0, m0, p1, m1, t) {
   const t2 = t * t, t3 = t2 * t;

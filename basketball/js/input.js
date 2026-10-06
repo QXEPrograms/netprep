@@ -12,6 +12,7 @@ ISO.Input = class {
       crossover: ['KeyE'],
       stepBack: ['KeyQ'],
       shoot: ['Space'],
+      pass: ['KeyF'],
     };
     // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
     this.presses = new Set();
@@ -23,7 +24,12 @@ ISO.Input = class {
       if (!e.repeat && !this.keys.has(e.code)) this.presses.add(e.code);
       this.keys.add(e.code);
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    // When each key was last released (event time, ms), for sub-frame timing.
+    this.upTime = {};
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      this.upTime[e.code] = e.timeStamp;
+    });
     // Releasing keys while the window is unfocused would otherwise leave them "stuck".
     window.addEventListener('blur', () => { this.keys.clear(); this.presses.clear(); });
   }
@@ -48,6 +54,16 @@ ISO.Input = class {
       if (this.presses.delete(code)) hit = true;
     }
     return hit;
+  }
+
+  // Seconds since `action` was released, clamped to [0, maxAge]. Lets timing
+  // judge a release between frames instead of at the next frame.
+  releaseAge(action, maxAge) {
+    if (this.pressed(action)) return 0;
+    let latest = -Infinity;
+    for (const code of this.bindings[action]) latest = Math.max(latest, this.upTime[code] ?? -Infinity);
+    if (!isFinite(latest)) return 0;
+    return Math.max(0, Math.min(maxAge, (performance.now() - latest) / 1000));
   }
 
   isDown(action) {

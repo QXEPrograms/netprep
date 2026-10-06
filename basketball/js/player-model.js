@@ -168,14 +168,24 @@ ISO.PlayerModel = class {
     const extra = pose.dribble ? pose.dribble.body : NO_BODY;
     const flex = 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * extra.crouch;
 
+    // Hips can shift sideways (weight shift); the legs angle back so the feet
+    // stay planted. sway > 0 = toward the character's right (local -x).
+    const sway = extra.sway || 0;
+    const legLean = sway / 0.85;
+    const wide = 0.05 * Math.abs(extra.crouch || 0);   // wider base when dipping
+
     // Legs: opposite phase; knee bends most while the leg swings forward.
     this.legs.forEach((leg, i) => {
       const ph = p + (i === 0 ? 0 : Math.PI);
       const sw = Math.sin(ph);
-      leg.hip.rotation.set(-sw * swing - flex, 0, 0);
-      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 2 * flex;
-      leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex;
+      // Jab step: the leg on the jab side (character right = local -x) lifts and reaches.
+      const jab = extra.jab ? Math.max(0, (leg.side < 0 ? 1 : -1) * extra.jab) : 0;
+      // (the jab goes out to the side, not forward, so the knee stays clear of the ball)
+      leg.hip.rotation.set(-sw * swing - flex - 0.15 * jab, 0, legLean + leg.side * wide + leg.side * 0.22 * jab);
+      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 2 * flex + 0.4 * jab;
+      leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex - 0.2 * jab;
     });
+    this.body.position.x = -sway;
 
     // Arms swing opposite to the legs; elbows stay bent like a runner.
     this.arms.forEach((arm, i) => {
@@ -203,8 +213,9 @@ ISO.PlayerModel = class {
     this.head.rotation.x = -this.lean * 0.6;
 
     if (pose.stepBack) this._poseStepBack(pose.stepBack);
-    if (pose.shot) this._poseShot(pose.shot);
-    this._crossfade(dt, pose.shot ? 'shot' : pose.stepBack ? 'stepBack' : 'base');
+    if (pose.shot) pose.shot.fake ? this._poseFake(pose.shot) : this._poseShot(pose.shot);
+    if (pose.pass) this._posePass(pose.pass);
+    this._crossfade(dt, pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
     this._poseArms(dt, pose.dribble);
   }
 
@@ -251,6 +262,44 @@ ISO.PlayerModel = class {
     this.body.rotation.z = lerp(this.body.rotation.z, 0, w);
   }
 
+  // Pump fake: dip, then rise tall to sell the shot (feet stay down), then
+  // settle back into the dribble stance. u = 0..1 over the fake.
+  _poseFake({ u, rise, hold }) {
+    const keys = [
+      [0,           -0.42, 0.85, 0.20],
+      [rise * 0.45, -0.55, 1.10, 0.24],   // quick dip
+      [rise,        -0.20, 0.42, 0.02],   // up tall, chest up: looks like a shot
+      [hold,        -0.22, 0.45, 0.02],
+      [1,           -0.40, 0.80, 0.22],   // back to the dribble stance
+    ];
+    const k = sampleKeys(keys, u);
+    const w = smoothstep(0, 0.1, u) * (1 - smoothstep(0.9, 1, u));
+    if (w <= 0) return;
+    this.legs.forEach((leg) => {
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, k[1], w);
+      leg.hip.rotation.z = lerp(leg.hip.rotation.z, leg.side * 0.04, w);
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, k[2], w);
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, -(k[1] + k[2]) * 0.9, w);
+    });
+    const reach = 0.44 * Math.cos(k[1]) + 0.41 * Math.cos(k[1] + k[2]);
+    this.body.position.y = lerp(this.body.position.y, reach + 0.0675 - 0.92, w);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, k[3], w);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0.1, w);
+    this.head.rotation.x = lerp(this.head.rotation.x, -0.15, w * bellCurve(u, rise * 0.5, hold + 0.1)); // eyes up at the rim
+  }
+
+  // Chest pass: a small step into the pass with the chest squared up.
+  // u = 0..1 over the pass.
+  _posePass({ u }) {
+    const step = bellCurve(u, 0.15, 0.95);
+    const w = smoothstep(0, 0.12, u) * (1 - smoothstep(0.85, 1, u));
+    const front = this.legs[0];   // right foot steps toward the target
+    front.hip.rotation.x = lerp(front.hip.rotation.x, -0.55, w * step);
+    front.knee.rotation.x = lerp(front.knee.rotation.x, 0.7, w * step);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, 0.12 + 0.12 * step, w);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0, w);
+  }
+
   // When the pose source changes (e.g. a shot starts during a step-back
   // landing), ease from last frame's legs/body over a short window instead of
   // snapping to the new source.
@@ -277,6 +326,7 @@ ISO.PlayerModel = class {
       out[i++] = leg.knee.rotation.x; out[i++] = leg.ankle.rotation.x;
     }
     out[i++] = this.body.position.y;
+    out[i++] = this.body.position.x;
     out[i++] = this.torso.rotation.x;
     out[i++] = this.torso.rotation.y;
     return out;
@@ -289,6 +339,7 @@ ISO.PlayerModel = class {
       leg.knee.rotation.x = v[i++]; leg.ankle.rotation.x = v[i++];
     }
     this.body.position.y = v[i++];
+    this.body.position.x = v[i++];
     this.torso.rotation.x = v[i++];
     this.torso.rotation.y = v[i++];
   }
@@ -389,7 +440,7 @@ ISO.PlayerModel = class {
   }
 };
 
-const NO_BODY = { crouch: 0, twist: 0, roll: 0 };
+const NO_BODY = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0 };
 //                 u     fHip   fKnee  bHip   bKnee  lean   hop
 const STEPBACK_KEYS = [
   [0.00, -0.40, 0.80, -0.40, 0.80, 0.22, 0.00],  // dribble stance
@@ -406,6 +457,7 @@ function sampleKeys(keys, u) {
   const t = smoothstep(a[0], b[0], u);
   return a.map((v, j) => lerp(v, b[j], t));
 }
+function bellCurve(v, a, b) { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return Math.sin(Math.PI * t) ** 2; }
 function smoothstep(a, b, v) { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }

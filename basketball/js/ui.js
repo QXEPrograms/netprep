@@ -8,13 +8,14 @@ ISO.UI = class {
     this.meter = el('div', 'shot-meter');
     const track = el('div', 'shot-meter__track');
     this.zoneEls = {
-      early: el('div', 'shot-meter__zone shot-meter__zone--early'),
+      early: el('div', 'shot-meter__zone shot-meter__zone--near'),
       perfect: el('div', 'shot-meter__zone shot-meter__zone--perfect'),
-      late: el('div', 'shot-meter__zone shot-meter__zone--late'),
+      late: el('div', 'shot-meter__zone shot-meter__zone--near'),
+      ideal: el('div', 'shot-meter__ideal'),
     };
     this.fill = el('div', 'shot-meter__fill');
     this.marker = el('div', 'shot-meter__marker');
-    track.append(this.zoneEls.early, this.zoneEls.perfect, this.zoneEls.late, this.fill, this.marker);
+    track.append(this.zoneEls.early, this.zoneEls.late, this.fill, this.zoneEls.perfect, this.zoneEls.ideal, this.marker);
     this.meter.append(track);
 
     // Release feedback text.
@@ -31,7 +32,39 @@ ISO.UI = class {
     this.scoreValue.textContent = '0';
     this.scoreboard.append(label, this.scoreValue);
 
-    container.append(this.scoreboard, this.meter, this.feedback);
+    // Controls guide along the bottom edge.
+    this.controls = el('div', 'controls-bar');
+    // [keys, label, alternate keys, short label for narrow screens]
+    const CONTROLS = [
+      [['W', 'A', 'S', 'D'], 'Move', ['↑', '←', '↓', '→'], 'Move'],
+      [['Shift'], 'Sprint', null, 'Sprint'],
+      [['E'], 'Crossover', null, 'Cross'],
+      [['Q'], 'Step back', null, 'Step back'],
+      [['Space'], 'Tap: pump fake', null, 'Tap: fake'],
+      [['Space'], 'Hold / release: shoot', null, 'Hold: shoot'],
+      [['F'], 'Pass', null, 'Pass'],
+    ];
+    for (const [keys, label, alt, short] of CONTROLS) {
+      const item = el('div', 'controls-bar__item');
+      const caps = el('span', 'controls-bar__keys');
+      keys.forEach((k) => { const c = el('kbd', 'keycap' + (k.length > 1 ? ' keycap--wide' : '')); c.textContent = k; caps.append(c); });
+      if (alt) {
+        const or = el('span', 'controls-bar__or'); or.textContent = '/'; caps.append(or);
+        alt.forEach((k) => { const c = el('kbd', 'keycap keycap--alt'); c.textContent = k; caps.append(c); });
+      }
+      const text = el('span', 'controls-bar__label');
+      text.textContent = label;
+      const shortText = el('span', 'controls-bar__label controls-bar__label--short');
+      shortText.textContent = short;
+      item.append(caps, text, shortText);
+      this.controls.append(item);
+    }
+
+    // Small transient notice (e.g. no pass target).
+    this.toast = el('div', 'hud-toast');
+
+    container.append(this.scoreboard, this.meter, this.feedback, this.toast, this.controls);
+    this._toastUntil = 0;
     this._score = 0;
 
     this._zonesSet = false;
@@ -44,21 +77,25 @@ ISO.UI = class {
 
   // state: { shooting, scoring, camera, anchor } — anchor is the world
   // position the meter sits beside (the shooter).
-  update(dt, { shooting, scoring, camera, anchor }) {
+  update(dt, { shooting, passing, scoring, camera, anchor }) {
     this._time += dt;
     if (scoring) this._updateScore(scoring);
+    if (passing && passing.passBlocked) this._showToast('No teammate to pass to yet');
+    if (this._time > this._toastUntil) this.toast.classList.remove('is-shown');
     if (!shooting) return;
     if (!this._zonesSet) this._setZones(shooting.timingZones);
 
-    if (shooting.isShooting && !this._wasShooting) {
+    // The meter appears once a shot is committed (a pump fake never shows it).
+    const committed = shooting.isShooting && shooting.shotCommitted;
+    if (committed && !this._wasShooting) {
       // New shot: reset the meter.
       this._judged = false;
       this.meter.className = 'shot-meter is-visible';
       this.marker.style.opacity = '0';
     }
-    this._wasShooting = shooting.isShooting;
+    this._wasShooting = committed;
 
-    if (shooting.isShooting || this._time < this._meterHideAt) {
+    if (committed || this._time < this._meterHideAt) {
       this.fill.style.height = `${(shooting.shotMeter * 100).toFixed(1)}%`;
       this._position(camera, anchor);
     }
@@ -69,7 +106,7 @@ ISO.UI = class {
       this._meterHideAt = this._time + 0.9;
     }
 
-    if (!shooting.isShooting && this._time >= this._meterHideAt) {
+    if (!committed && this._time >= this._meterHideAt) {
       this.meter.classList.remove('is-visible');
     }
   }
@@ -96,6 +133,12 @@ ISO.UI = class {
     this._showFeedback(main, sub, kind);
   }
 
+  _showToast(text) {
+    this.toast.textContent = text;
+    this.toast.classList.add('is-shown');
+    this._toastUntil = this._time + 1.4;
+  }
+
   _showFeedback(main, sub, kind) {
     this.feedbackMain.textContent = main;
     this.feedbackSub.textContent = sub;
@@ -109,9 +152,10 @@ ISO.UI = class {
       elm.style.bottom = `${a * 100}%`;
       elm.style.height = `${(b - a) * 100}%`;
     };
-    band(this.zoneEls.early, z.early, z.perfect);
-    band(this.zoneEls.perfect, z.perfect, z.late);
-    band(this.zoneEls.late, z.late, z.veryLate);
+    band(this.zoneEls.early, z.nearStart, z.greenStart);
+    band(this.zoneEls.perfect, z.greenStart, z.greenEnd);
+    band(this.zoneEls.late, z.greenEnd, z.nearEnd);
+    this.zoneEls.ideal.style.bottom = `${z.ideal * 100}%`;
     this._zonesSet = true;
   }
 
@@ -132,7 +176,9 @@ ISO.UI = class {
     v.project(camera);
     const w = this.container.clientWidth, h = this.container.clientHeight;
     const x = (v.x * 0.5 + 0.5) * w;
-    const y = (-v.y * 0.5 + 0.5) * h;
+    // Never let the meter slide down behind the controls bar.
+    const maxY = h - this.controls.offsetHeight - 22 - this.meter.offsetHeight + 20;
+    const y = Math.min((-v.y * 0.5 + 0.5) * h, maxY);
     this.meter.style.transform = `translate(${Math.round(x + 34)}px, ${Math.round(y - 20)}px)`;
   }
 };

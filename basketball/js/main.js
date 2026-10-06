@@ -29,7 +29,8 @@ ISO.Game = class {
     this.input = new ISO.Input();
     // Hoop collisions + made-basket detection for the free ball.
     this.hoopPhysics = new ISO.HoopPhysics();
-    this.hoopPhysics.onBasket = ({ swish }) => this.hoop.net.pulse(swish ? 1 : 0.65);
+    // The net is driven by the ball itself; rim hits add a shake.
+    this.hoopPhysics.onRimHit = (strength, normal) => this.hoop.net.kick(Math.min(4, strength), normal);
     if (ISO.CONFIG.debugPhysics) this.scene.add(this.hoopPhysics.buildDebug());
 
     this.ball = new ISO.Basketball();
@@ -43,6 +44,17 @@ ISO.Game = class {
       startFacing: Math.PI,                         // facing the basket
     });
     this.scene.add(this.player.object);
+
+    // No teammates yet, so passing has no target in normal play. In debug mode
+    // (?debug) a marker on the wing catches passes and throws them back.
+    if (ISO.CONFIG.debugPhysics) {
+      this.debugPassTarget = new ISO.DebugPassTarget({
+        position: new THREE.Vector3(-5.2, 1.25, 7.2),
+        getReceiver: () => new THREE.Vector3(this.player.position.x, 1.2, this.player.position.z),
+      });
+      this.player.passing.addTarget(this.debugPassTarget);
+      this.scene.add(this.debugPassTarget.object);
+    }
     this.ball.update(0);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.snap();
@@ -65,12 +77,14 @@ ISO.Game = class {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     this.player.update(dt);
     this.ball.update(dt);
-    this.hoop.net.update(dt);
+    if (this.debugPassTarget) this.debugPassTarget.update(dt);
+    this.hoop.net.update(dt, this.ball);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.update(dt);
     this.scoring.update(dt);
     this.ui.update(dt, {
       shooting: this.player.shooting,
+      passing: this.player.passing,
       scoring: this.scoring,
       camera: this.cameraController.camera,
       anchor: this.player.position,
