@@ -10,6 +10,7 @@ ISO.Input = class {
       right: ['KeyD', 'ArrowRight'],
       sprint: ['ShiftLeft', 'ShiftRight'],
       crossover: ['KeyE'],
+      stepBack: ['KeyQ'],
     };
     // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
     this.presses = new Set();

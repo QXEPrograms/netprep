@@ -62,6 +62,9 @@ ISO.DribbleController = class {
     this.crossoverCount = 0;
     this.crossoverWorldDir = new THREE.Vector3();
     this.cooldown = 0;
+    // Scales the velocity lead. Moves that travel backward (step-back) set this
+    // to 0 so the ball stays in front instead of trailing behind the body.
+    this.leadScale = 1;
 
     // Hand requests for the model (character side: +1 right, -1 left).
     this.hands = [
@@ -123,7 +126,7 @@ ISO.DribbleController = class {
 
     // Velocity lead pushes the ball ahead near the floor when moving
     // (smoothed so a sudden stop, e.g. at a wall, eases the ball back in).
-    this._leadTarget.copy(mover.velocity).multiplyScalar(s.lead).clampLength(0, s.maxLead);
+    this._leadTarget.copy(mover.velocity).multiplyScalar(s.lead * this.leadScale).clampLength(0, s.maxLead);
     this._lead.lerp(this._leadTarget, dt === 0 ? 1 : 1 - Math.exp(-12 * dt));
 
     if (this.mode === MODES.CROSSOVER) this._updateCrossover(dt, mover);

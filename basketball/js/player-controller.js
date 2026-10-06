@@ -15,6 +15,7 @@ ISO.PlayerController = class {
     // Ball handling is its own system; the controller just runs it each frame.
     this.ball = ball;
     this.dribble = ball ? new ISO.DribbleController(ball) : null;
+    this.stepBack = new ISO.StepBackMove();
     if (ball) ball.holder = this;
     this._updateBallHandling(0);
 
@@ -29,19 +30,29 @@ ISO.PlayerController = class {
   update(dt) {
     const axes = this.input.getMoveAxes();
     this._screenToWorld(axes, this._dir);
-    this._handleMoves();
+    this._handleMoves(dt);
     this.locomotion.update(dt, this._dir, this.input.isSprinting());
     this._updateBallHandling(dt);
   }
 
   // Ball-handling moves. Presses are consumed every frame so a press during a
-  // move or its cooldown is dropped rather than queued.
-  _handleMoves() {
+  // move or its cooldown is dropped rather than queued. Moves never overlap:
+  // E is ignored during a step-back, Q is ignored during a crossover.
+  _handleMoves(dt) {
+    const crossPressed = this.input.consumePress('crossover');
+    const stepPressed = this.input.consumePress('stepBack');
     if (!this.dribble) return;
-    if (this.input.consumePress('crossover')) this.dribble.requestCrossover();
-    // A crossover costs a little speed; Locomotion's speedScale hook keeps the
-    // movement physics themselves unchanged.
-    this.locomotion.speedScale = this.dribble.isCrossingOver ? this.dribble.settings.xSpeedScale : 1;
+    const sb = this.stepBack, dr = this.dribble;
+
+    if (crossPressed && !sb.isSteppingBack) dr.requestCrossover();
+    if (stepPressed && !dr.isCrossingOver) sb.request(this.locomotion);
+
+    // A step-back briefly takes over velocity/facing through Locomotion's drive
+    // hook; a crossover costs a little speed through speedScale. Movement
+    // physics themselves are unchanged.
+    this.locomotion.drive = sb.update(dt, this.locomotion);
+    this.locomotion.speedScale = dr.isCrossingOver ? dr.settings.xSpeedScale : 1;
+    dr.leadScale = sb.isSteppingBack ? 0 : 1;
   }
 
   // Order matters: the dribble places the ball from the body's new position,
@@ -51,7 +62,9 @@ ISO.PlayerController = class {
     let pose = {};
     if (this.dribble && this.ball.holder === this) {
       this.dribble.update(dt, state);
-      pose = { dribble: this.dribble.getPose() };
+      const stepBack = this.stepBack.getPose();
+      if (stepBack) stepBack.frontSide = this.dribble.sideSign; // plant the ball-side foot
+      pose = { dribble: this.dribble.getPose(), stepBack };
     }
     this.model.update(dt, state, pose);
   }

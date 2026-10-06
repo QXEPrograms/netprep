@@ -22,8 +22,14 @@ ISO.Locomotion = class {
     this.sprinting = false;
     // Multiplier hook so later systems (dribbling, shooting) can slow the player down.
     this.speedScale = 1;
+    // Optional temporary control by a move (e.g. a step-back):
+    //   { velocity: Vector3, weight: 0..1, facing: yaw }
+    // weight blends the normal velocity toward drive.velocity (1 = fully driven);
+    // facing replaces the usual turn-toward-travel. null = normal control.
+    this.drive = null;
 
     this._desired = new THREE.Vector3();
+    this._facingDir = new THREE.Vector3();
   }
 
   get speed() {
@@ -54,10 +60,19 @@ ISO.Locomotion = class {
       this.velocity.z += (dvz / dvLen) * step;
     }
 
+    const drive = this.drive;
+    if (drive && drive.weight > 0) {
+      // weight is per 1/60 s; convert so the blend is frame-rate independent
+      const k = drive.weight >= 1 ? 1 : 1 - Math.pow(1 - drive.weight, dt * 60);
+      this.velocity.x += (drive.velocity.x - this.velocity.x) * k;
+      this.velocity.z += (drive.velocity.z - this.velocity.z) * k;
+    }
+
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.z * dt;
     this._applyBounds();
-    this._updateFacing(dt, hasInput ? this._desired : this.velocity);
+    if (drive) this._facingDir.set(Math.sin(drive.facing), 0, Math.cos(drive.facing));
+    this._updateFacing(dt, drive ? this._facingDir : hasInput ? this._desired : this.velocity);
   }
 
   _applyBounds() {

@@ -169,7 +169,7 @@ ISO.PlayerModel = class {
     this.legs.forEach((leg, i) => {
       const ph = p + (i === 0 ? 0 : Math.PI);
       const sw = Math.sin(ph);
-      leg.hip.rotation.x = -sw * swing - flex;
+      leg.hip.rotation.set(-sw * swing - flex, 0, 0);
       leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 2 * flex;
       leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex;
     });
@@ -199,7 +199,36 @@ ISO.PlayerModel = class {
     this.head.rotation.y = -this.torso.rotation.y * 0.8;
     this.head.rotation.x = -this.lean * 0.6;
 
+    if (pose.stepBack) this._poseStepBack(pose.stepBack);
     this._poseArms(dt, pose.dribble);
+  }
+
+  // Step-back: keyed leg poses blended over the normal run/stance pose.
+  // Each key: [u, frontHip, frontKnee, backHip, backKnee, torsoLean, hop]
+  // (hip < 0 swings the thigh forward, knee > 0 bends the shin back,
+  //  lean > 0 tips the chest forward, hop lifts the body).
+  _poseStepBack({ u, frontSide }) {
+    const k = sampleKeys(STEPBACK_KEYS, u);
+    const w = smoothstep(0, 0.14, u) * (1 - smoothstep(0.86, 1, u));
+    if (w <= 0) return;
+
+    // Front leg = the ball side (character right = local -x = legs[0]).
+    const front = frontSide > 0 ? this.legs[0] : this.legs[1];
+    const back = front === this.legs[0] ? this.legs[1] : this.legs[0];
+    const set = (leg, hip, knee) => {
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, hip, w);
+      leg.hip.rotation.z = lerp(0, leg.side * 0.06, w);   // slightly wider base
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, knee, w);
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, -(hip + knee) * 0.9, w); // feet stay level
+    };
+    set(front, k[1], k[2]);
+    set(back, k[3], k[4]);
+
+    // Height: the longer (planted) leg touches the floor, plus any hop.
+    const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
+    const grounded = Math.max(reach(k[1], k[2]), reach(k[3], k[4])) + 0.0675 - 0.92;
+    this.body.position.y = lerp(this.body.position.y, grounded + k[6], w);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, k[5], w);
   }
 
   // Each arm blends from its free pose (run swing, or a guard in front while
@@ -271,6 +300,23 @@ ISO.PlayerModel = class {
 };
 
 const NO_BODY = { crouch: 0, twist: 0, roll: 0 };
+//                 u     fHip   fKnee  bHip   bKnee  lean   hop
+const STEPBACK_KEYS = [
+  [0.00, -0.40, 0.80, -0.40, 0.80, 0.22, 0.00],  // dribble stance
+  [0.22, -0.55, 1.00, -0.30, 0.95, 0.30, 0.00],  // plant: sink, front foot set
+  [0.40, -0.30, 0.35,  0.35, 0.55, 0.02, 0.02],  // push off the front foot, back foot reaches
+  [0.58, -0.45, 0.85,  0.20, 0.40,-0.14, 0.05],  // airborne, chest back
+  [0.78, -0.30, 0.95,  0.05, 0.95, 0.12, 0.00],  // land low
+  [1.00, -0.40, 0.80, -0.40, 0.80, 0.22, 0.00],  // balanced dribble stance
+];
+function sampleKeys(keys, u) {
+  let i = 0;
+  while (i < keys.length - 2 && u > keys[i + 1][0]) i++;
+  const a = keys[i], b = keys[i + 1];
+  const t = smoothstep(a[0], b[0], u);
+  return a.map((v, j) => lerp(v, b[j], t));
+}
+function smoothstep(a, b, v) { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 })();
