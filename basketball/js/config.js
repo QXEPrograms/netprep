@@ -6,6 +6,10 @@
 window.ISO = window.ISO || {};
 
 ISO.CONFIG = {
+  // Physics debug view (rim collision tube, backboard boxes, basket planes).
+  // Off by default; add ?debug to the URL to turn it on.
+  debugPhysics: /[?&]debug\b/.test(window.location.search),
+
   court: {
     width: 15.24,          // sideline to sideline
     halfLength: 14.33,     // baseline to half-court line

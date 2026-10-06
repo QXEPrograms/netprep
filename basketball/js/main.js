@@ -27,7 +27,13 @@ ISO.Game = class {
     this.cameraController.setAspect(container.clientWidth / container.clientHeight);
 
     this.input = new ISO.Input();
+    // Hoop collisions + made-basket detection for the free ball.
+    this.hoopPhysics = new ISO.HoopPhysics();
+    this.hoopPhysics.onBasket = ({ swish }) => this.hoop.net.pulse(swish ? 1 : 0.65);
+    if (ISO.CONFIG.debugPhysics) this.scene.add(this.hoopPhysics.buildDebug());
+
     this.ball = new ISO.Basketball();
+    this.ball.world = this.hoopPhysics;
     this.ball.addTo(this.scene);
     this.player = new ISO.PlayerController({
       input: this.input,

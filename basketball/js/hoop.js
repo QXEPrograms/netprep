@@ -204,6 +204,10 @@ ISO.Hoop = (function () {
       object: lines,
       sway: 0,        // 0..1 impulse, decays over time
       time: 0,
+      // Ball went through: a cleaner make (swish) gives a stronger pull.
+      pulse(strength) {
+        this.sway = Math.max(this.sway, strength);
+      },
       update(dt) {
         this.time += dt;
         this.sway *= Math.exp(-dt * 3);

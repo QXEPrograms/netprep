@@ -3,14 +3,16 @@
 // The ball is always in exactly one mode:
 //   CONTROLLED  another system (dribble, shot gather) decides where the ball is
 //               each frame and calls place().
-//   FREE        the ball flies on its own: velocity + gravity + spin, with
-//               simple floor bounces. (Rim/backboard contact comes later.)
+//   FREE        the ball flies on its own: velocity + gravity + spin, colliding
+//               with the rim, backboard, stanchion and floor (HoopPhysics).
 ISO.Basketball = class {
   static RADIUS = 0.12; // 24 cm diameter, regulation size
 
   static MODES = { CONTROLLED: 'controlled', FREE: 'free' };
 
   static GRAVITY = 9.81;
+
+  static STEP = 1 / 240;   // fixed physics step for free flight (s)
 
   constructor() {
     this.radius = ISO.Basketball.RADIUS;
@@ -24,6 +26,9 @@ ISO.Basketball = class {
     this.freeTime = 0;                          // seconds since the ball went free
     this.settled = false;                       // free ball has come to rest on the floor
     this.bounces = 0;                           // floor bounces since going free
+    this.contacts = 0;                          // collision responses since going free
+    this.world = null;                          // HoopPhysics (colliders + basket detection)
+    this._acc = 0;
 
     this.object = new THREE.Group();          // positioned, not rotated
     this.object.name = 'basketball';
@@ -72,10 +77,14 @@ ISO.Basketball = class {
     this.freeTime = 0;
     this.settled = false;
     this.bounces = 0;
+    this.contacts = 0;
+    this._acc = 0;
     this._hasPrev = false;
+    if (this.world) this.world.beginFlight();
   }
 
   update(dt) {
+    if (this.world) this.world.beginFrame();
     if (this.mode === ISO.Basketball.MODES.FREE) this._updateFree(dt);
     else this._spin(dt);
     this.object.position.copy(this.position);
@@ -88,43 +97,68 @@ ISO.Basketball = class {
     this.shadow.material.opacity = 0.35 / (1 + h * 2.5);
   }
 
-  // Free flight. Position uses the exact constant-gravity step, so the arc does
-  // not depend on frame rate.
+  // Free flight runs on a fixed 240 Hz step (an accumulator absorbs the frame
+  // time), so results are the same at any frame rate. At shot speeds a step
+  // moves the ball ~4 cm, far less than the 13 cm it would need to cross the
+  // rim tube or the 27 cm to cross the backboard, so nothing tunnels; very
+  // fast balls are split into extra sub-steps anyway.
   _updateFree(dt) {
     if (dt <= 0) return;
+    const STEP = ISO.Basketball.STEP;
+    this._acc += Math.min(dt, 0.25);
+    while (this._acc >= STEP) {
+      this._acc -= STEP;
+      const n = Math.max(1, Math.ceil((this.velocity.length() * STEP) / 0.05));
+      for (let i = 0; i < n; i++) this._step(STEP / n);
+    }
+  }
+
+  _step(h) {
     const g = ISO.Basketball.GRAVITY, r = this.radius;
-    const p = this.position, v = this.velocity;
-    this.freeTime += dt;
+    const p = this.position, v = this.velocity, w = this.angularVelocity;
+    const world = this.world;
+    this.freeTime += h;
+    const prevY = p.y;
 
-    p.x += v.x * dt;
-    p.z += v.z * dt;
-    p.y += v.y * dt - 0.5 * g * dt * dt;
-    v.y -= g * dt;
+    // Exact constant-gravity step.
+    p.x += v.x * h;
+    p.z += v.z * h;
+    p.y += v.y * h - 0.5 * g * h * h;
+    v.y -= g * h;
 
-    // Floor: bounce with energy loss, then roll to a stop.
-    if (p.y < r) {
+    const floorVy = v.y;
+    if (world) {
+      world.collide(this);
+      world.netDrag(this, h);
+      world.track(this, prevY);
+    } else if (p.y < r) {
       p.y = r;
-      if (v.y < -0.6) {
-        v.y = -v.y * 0.72;
-        v.x *= 0.82; v.z *= 0.82;
-        this.angularVelocity.multiplyScalar(0.5);
-        this.bounces++;
-      } else {
-        v.y = 0;
-        const f = Math.exp(-1.6 * dt);
-        v.x *= f; v.z *= f;
-        if (Math.hypot(v.x, v.z) < 0.12) { v.x = 0; v.z = 0; this.settled = true; }
+      v.y = Math.abs(v.y) > 0.35 ? -v.y * 0.78 : 0;
+    }
+
+    // Floor bookkeeping: count real bounces, roll to a stop, then settle.
+    const onFloor = p.y <= r + 1e-4;
+    if (onFloor) {
+      if (floorVy < -0.35 && v.y > 0) this.bounces++;
+      if (Math.abs(v.y) < 0.35) {
+        v.y = Math.max(0, v.y);
+        // Rolling resistance on hardwood: a gentle constant slowdown.
+        const sp = Math.hypot(v.x, v.z);
+        const f = sp > 0 ? Math.max(0, sp - 1.2 * h) / sp : 0;
+        v.x *= f; v.z *= f; w.multiplyScalar(f);
+        if (v.x * v.x + v.z * v.z < 0.0036 && v.y === 0) {
+          v.set(0, 0, 0); w.multiplyScalar(0.9);
+          this.settled = true;
+        }
       }
     }
 
-    // Spin: free-flight angular velocity, rolling on the floor once settled-ish.
-    const w = this.angularVelocity;
+    // Spin the visual ball by the angular velocity.
     const wl = w.length();
-    if (wl > 1e-3) {
-      this._q.setFromAxisAngle(this._tmp.copy(w).divideScalar(wl), wl * dt);
+    if (wl > 1e-4) {
+      this._q.setFromAxisAngle(this._tmp.copy(w).divideScalar(wl), wl * h);
       this.spinner.quaternion.premultiply(this._q);
     }
-    if (p.y <= r + 1e-4) this._spin(dt);
   }
 
   // Subtle, believable spin: roll with horizontal travel plus a little

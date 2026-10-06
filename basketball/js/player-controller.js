@@ -81,7 +81,7 @@ ISO.PlayerController = class {
     // No rebounds yet: once the shot is over and the ball has settled (or had
     // plenty of time), hand it back so play can continue.
     const ball = this.ball;
-    if (!sh.isShooting && ball.mode === ISO.Basketball.MODES.FREE && (ball.settled || ball.freeTime > 3)) {
+    if (!sh.isShooting && ball.mode === ISO.Basketball.MODES.FREE && (ball.settled || ball.freeTime > 4)) {
       ball.setControlled();
       ball.holder = this;
       dr.resume('right');
