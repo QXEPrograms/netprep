@@ -70,6 +70,11 @@ ISO.ScoringSystem = class {
     return this.playerStats[playerId] || (this.playerStats[playerId] = { points: 0, made: 0, missed: 0, blocks: 0 });
   }
 
+  // A new game: team scores back to 0 (player stats are kept for the session).
+  resetScores() {
+    for (const t in this.teamScore) this.teamScore[t] = 0;
+  }
+
   // Drop a shot without a result (dev resets only).
   cancelPending() { this.pending = null; }
 

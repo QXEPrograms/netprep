@@ -101,7 +101,7 @@ ISO.FinishSystem = class {
     tl.air = cfg.air;
     tl.release = tl.takeoff + cfg.releaseAfterTakeoff;
     tl.land = tl.takeoff + tl.air;
-    tl.end = tl.land + (kind === 'floater' ? 0.25 : 0.32);
+    tl.end = tl.land + O.finishRecover[kind];          // landing recovery (offense-config.js)
 
     this.approachQuality = this._approachQuality(kind);
     this._twoHanded = kind === 'dunk' && Math.abs(plan.ctx.sideOffset) < 0.35;

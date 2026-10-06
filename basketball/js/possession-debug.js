@@ -2,7 +2,8 @@
 // player's identity/role, as a text panel (top right).
 (function () {
 ISO.PossessionDebug = class {
-  constructor(possession, roster, scoring, hud) {
+  constructor(possession, roster, scoring, hud, game = null) {
+    this.game = game;
     this.P = possession;
     this.roster = roster;
     this.scoring = scoring;
@@ -30,6 +31,18 @@ ISO.PossessionDebug = class {
       const ctl = p.role === 'offense' ? 'OffensiveLocomotion' : 'DefensiveLocomotion';
       const who = p.role === 'offense' ? `vs ${p.matchupId || '-'}` : `guards ${p.assignmentId || '-'}`;
       lines.push(`${p.id} team ${p.teamId} ${p.controlSource.padEnd(5)} ${(p.role || '-').padEnd(7)} ${ctl} ${who}${p.isBallHandler ? '  [ball]' : ''}`);
+    }
+    // Reference-match line: the matchup as one system.
+    const g = this.game;
+    if (g && g.defender) {
+      const o = g.player, d = g.defender, L = o.locomotion, DL = d.locomotion, dr = o.dribble;
+      const gap = Math.hypot(o.position.x - d.position.x, o.position.z - d.position.z);
+      const cam = g.cameraController, f = cam.current;
+      const sh = o.shooting, fi = o.finishing;
+      const shot = sh.busy ? (sh.isPumpFaking ? 'pump fake' : `${sh.shotType} ${sh.shotPhase || ''}`) : fi.busy ? `${fi.finishType} ${fi.finishPhase || ''}` : '-';
+      lines.push(`REF  gap ${gap.toFixed(2)} m   commit ${(L.attack || 0).toFixed(2)} ${L.level || ''}   plant ${L.plantState || '-'}   dribble ${dr.hand[0].toUpperCase()} phase ${dr.phase.toFixed(2)}`);
+      lines.push(`     defender ${d.state}  react ${(d.ai.reactionDelay * 1000).toFixed(0)} ms  facing err ${(Math.abs(DL.defensiveFacingError) * 57.3).toFixed(0)}°  ${DL.mode}  jump ${DL.jumpState}`);
+      lines.push(`     shot ${shot}  contest ${d.contest.contestStrength.toFixed(2)}  blocks live ${d.blocks.active ? 'yes' : 'no'}   cam focus (${f.x.toFixed(1)}, ${f.z.toFixed(1)}) yaw ${(cam.yaw * 57.3).toFixed(0)}°`);
     }
     this.panel.textContent = lines.join('\n');
   }

@@ -252,7 +252,12 @@ ISO.DefenderAI = class {
         v.addScaledVector(b.dir, b.shift * D.settings.slideSpeed);
       }
       if (this._carry > 0) v.copy(this._carryVel);
-      out.allowRun = state === 'recovering' && spot.distanceTo(D.position) > St.runToRecover;
+      // Recovering on the perimeter is done in the stance (slide, chest on the
+      // ball): hips only turn to run when the ball handler is attacking the
+      // rim or has nearly got level — not on every lateral change of direction.
+      const threat = approach > St.recoverRunApproach || depth < St.recoverRunDepth ||
+        Math.hypot(S.vx, S.vz) > St.recoverRunSpeed;          // or simply outrunning a slide (a sprint)
+      out.allowRun = state === 'recovering' && spot.distanceTo(D.position) > St.runToRecover && threat;
       // hands: ball-side hand up while guarding; both up while respecting a fake
       this.handsUp = this.freeze > 0 ? 0.9 : 0.35;
     }
@@ -294,7 +299,13 @@ ISO.DefenderAI = class {
     this._recentFakes = this._recentFakes.filter((t) => now - t < 4);
 
     // Bites end once the real direction becomes visible.
-    if (this.bite && (S.move !== this.bite.move || S.moveProgress >= this.bite.until)) this.bite = null;
+    // A defender who bit is still carrying that weight when they see it: a
+    // short carry of the momentum they had (cfg biteCarry) before recovering.
+    if (this.bite && (S.move !== this.bite.move || S.moveProgress >= this.bite.until)) {
+      const carry = (M[this.bite.move] && M[this.bite.move].biteCarry) || 0;
+      if (carry > 0) { this._carry = Math.max(this._carry, carry); this._carryVel.copy(D.velocity); }
+      this.bite = null;
+    }
 
     const started = S.move && S.move !== prev.move ? S.move : null;
     if (started === 'crossover') {
@@ -304,12 +315,12 @@ ISO.DefenderAI = class {
         - (D.speed < 0.8 && dist >= 1.2 ? c.balancedPenalty : 0) - c.repeatPenalty * this._recentCrossovers.length;
       this._recentCrossovers.push(now);
       this._lastCrossoverSeen = now;
-      this._react('crossover', p, () => { this.bite = { move: 'crossover', dir: new THREE.Vector3(fx, 0, fz), until: 0.45, shift: c.shift }; });
+      this._react('crossover', p, () => { this.bite = { move: 'crossover', dir: new THREE.Vector3(fx, 0, fz), until: c.biteUntil, shift: c.shift }; });
     } else if (started === 'inAndOut') {
       const fx = rx * S.ioFake, fz = rz * S.ioFake, c = M.inAndOut;
       const anticipating = now - this._lastCrossoverSeen < M.anticipateWindow;
       const p = c.bite + (anticipating ? c.anticipateBonus : 0) + c.movingBonus * clamp01(toward(fx, fz) / 2.5);
-      this._react('inAndOut', p, () => { this.bite = { move: 'inAndOut', dir: new THREE.Vector3(fx, 0, fz), until: 0.62, shift: c.shift }; });
+      this._react('inAndOut', p, () => { this.bite = { move: 'inAndOut', dir: new THREE.Vector3(fx, 0, fz), until: c.biteUntil, shift: c.shift }; });
     } else if (started === 'hesitation') {
       const c = M.hesitation;
       const closing = toward(S.x - D.position.x, S.z - D.position.z) / Math.max(0.3, dist);

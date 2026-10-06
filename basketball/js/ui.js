@@ -70,6 +70,12 @@ ISO.UI = class {
     this._possNum = null;
   }
 
+  // Development: which reference scenario is running (?scenario=...).
+  setScenarioLabel(text) {
+    if (!this.scenarioEl) { this.scenarioEl = el('div', 'scenario-label'); this.container.append(this.scenarioEl); }
+    this.scenarioEl.textContent = text;
+  }
+
   // The controls guide follows the role YOUR player is playing.
   setRole(role) {
     if (role === this.role && this.controls.childElementCount) return;
@@ -208,10 +214,10 @@ ISO.UI = class {
       T.box.classList.add('is-pop');
     }
     const r = scoring.resolvedThisFrame;
-    if (!r) return;
+    if (!r || this._time < (this._winUntil || 0)) return;
     if (r.blocked && !r.made) return;              // already shown as a block
     let main, sub, kind;
-    const pts = `+${r.points}${r.isThree ? '  ·  3PT' : ''}`;
+    const pts = `+${r.points}${r.isThree ? '  ·  FROM DEEP' : ''}`;   // outside the arc (1s and 2s)
     const FINISH = { dunk: 'DUNK!', layup: 'LAYUP', floater: 'FLOATER' };
     if (FINISH[r.shotType]) {
       // Finishes have no meter: name the finish.
@@ -225,6 +231,20 @@ ISO.UI = class {
       main = 'MISSED'; sub = r.timing ? `${r.timing} RELEASE` : ''; kind = 'missed';
     }
     this._showFeedback(main, sub, kind);
+  }
+
+  // First to 11 reached (gameWon event): the result holds the screen for the
+  // game-over beat; the score resets when the next game starts.
+  showWin(e) {
+    const t = this.teams && this.teams[e.winnerTeamId];
+    const ids = Object.keys(this.teamEls);
+    const score = ids.map((id) => e.score[id] || 0).join(' – ');
+    this._winUntil = this._time + 2.4;
+    this.feedbackMain.textContent = `${t ? t.name : 'TEAM ' + e.winnerTeamId} WINS`;
+    this.feedbackSub.textContent = score;
+    this.feedback.className = 'shot-feedback is-win';
+    void this.feedback.offsetWidth;
+    this.feedback.classList.add('is-shown');
   }
 
   // A physical block happened (from the blockOccurred event).

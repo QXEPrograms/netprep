@@ -52,10 +52,10 @@ ISO.DEFENSE = {
     gapMid: 1.15,
     gapDrive: 0.95,        // ball handler attacking the rim
     gapNearRim: 0.85,
-    gapFar: 1.9,           // way out (sag off, don't chase to half court)
-    perimeterDist: 6.6,
+    gapFar: 1.7,           // way out (sag off, don't chase to half court)
+    perimeterDist: 7.8,    // the 1v1 matchup stays compact out to the top of the arc / check spot
     nearRimDist: 3.2,
-    farDist: 9.5,
+    farDist: 10.5,
     driveSpeed: 2.2,       // approach speed toward the rim that counts as a drive
     shade: 0.18,           // lateral shade toward the ball-hand side (force the other hand)
     rimProtect: 0.35,      // near the rim, pull the spot this much toward the rim
@@ -81,8 +81,10 @@ ISO.DEFENSE = {
   // ---- reactions to offensive moves ------------------------------------------
   // bite: chance (0..1) before context; context adds/subtracts.
   moves: {
-    crossover:  { bite: 0.4, movingBonus: 0.35, closeBonus: 0.12, balancedPenalty: 0.25, repeatPenalty: 0.12, shift: 0.75 },
-    inAndOut:   { bite: 0.3, anticipateBonus: 0.45, movingBonus: 0.2, shift: 0.65 },
+    // biteUntil: a bite lasts until this much of the move is visible; biteCarry:
+    // then this many seconds of the momentum it built (the weight to recover)
+    crossover:  { bite: 0.4, movingBonus: 0.35, closeBonus: 0.12, balancedPenalty: 0.25, repeatPenalty: 0.12, shift: 0.75, biteUntil: 0.45, biteCarry: 0 },
+    inAndOut:   { bite: 0.3, anticipateBonus: 0.45, movingBonus: 0.2, shift: 0.65, biteUntil: 0.62, biteCarry: 0 },
     hesitation: { bite: 0.3, closingBonus: 0.45, freeze: 0.32 },
     spin:       { besideBonus: 0.35, blind: 0.85 },   // blind: fraction of the spin the defender can't read it
     stepBack:   { carry: 0.12, forwardBonus: 0.1 },   // extra seconds of forward momentum
@@ -97,7 +99,10 @@ ISO.DEFENSE = {
     beatenLateral: 0.95,   // or this far off the line while level with the defender
     recoveredError: 0.6,   // back within this of the guard spot = recovered
     lostPosition: 1.1,     // this far from the guard spot (e.g. outrun sideways) = recovering
-    runToRecover: 0.9,     // while recovering, turn and run if still farther than this
+    runToRecover: 0.9,     // while recovering, turn and run if still farther than this...
+    recoverRunApproach: 1.5, // ...and only if the ball handler is attacking the rim (m/s toward it)
+    recoverRunDepth: 0.6,  // ...or the defender is less than this in front of them along the lane
+    recoverRunSpeed: 5.4,  // ...or they are moving faster than a slide can follow (sprinting)
     closeoutGap: 2.4,      // shot starting with the defender farther than this = closeout
     contestDist: 1.3,      // closeouts stop about here
     contestJumpChance: 0.6, // CPU: jumps on this share of contests (hands up otherwise)

@@ -152,6 +152,19 @@ ISO.PossessionSystem = class {
     // Possession only follows a shot taken while play was live.
     if (this.state !== S.SHOT_IN_FLIGHT && this.state !== S.LIVE) return;
     const shooting = r.shootingTeamId || this.offenseTeamId;
+    // First to 11: the game is over — a short beat, then a fresh game.
+    const rules = this.cfg.rules, score = this.scoring.teamScore;
+    if (r.made && rules && score[shooting] >= rules.targetScore) {
+      const loser = this.roster.otherTeam(shooting);
+      this.gameNumber = (this.gameNumber || 1);
+      this.lastGameWinnerTeamId = shooting;
+      const final = Object.assign({}, score);
+      if (this.events) this.events.emit('gameWon', { winnerTeamId: shooting, score: final, gameNumber: this.gameNumber });
+      const startTeam = rules.newGameBall === 'loser' && loser && this.roster.playersOn(loser).length ? loser : shooting;
+      this.next = { teamId: startTeam, reason: R.GAME_START, result: r.result, shotId: r.shotId, newGame: true };
+      this._enter(S.SHOT_RESOLVING, rules.gameOverDelay);
+      return;
+    }
     let teamId, reason, delay;
     if (r.made) { teamId = shooting; reason = R.MAKE; delay = this.cfg.makeResetDelay; }
     else {
@@ -193,6 +206,11 @@ ISO.PossessionSystem = class {
     this.state = S.RESETTING;
     const next = this.next || { teamId: this.offenseTeamId, reason: R.DEV };
     this.next = null;
+    if (next.newGame) {
+      this.scoring.resetScores();
+      this.gameNumber = (this.gameNumber || 1) + 1;
+      if (this.events) this.events.emit('gameStarted', { gameNumber: this.gameNumber, firstTeamId: next.teamId });
+    }
     const roster = this.roster, prevTeam = this.offenseTeamId;
     const off = next.teamId, def = roster.otherTeam(off);
     const changed = prevTeam !== null && prevTeam !== off;

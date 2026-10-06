@@ -93,6 +93,18 @@ ISO.OFFENSE = {
     idealDist: 3.8, arcAbove: 1.55,
     spread: { base: 0.058, distance: 0.03, angle: 0.06, speed: 0.025, fatigue: 0.1 },
   },
+  // Jump shot flow (seconds from the press). The gather/jump/release timeline
+  // (and so the meter and green window) lives in ShootingSystem settings and is
+  // unchanged; these are the parts that decide how long control is taken away.
+  jumpShot: {
+    landRecover: 0.2,      // after landing, before you can move freely again
+    // pump fake: a quick tap = ball up to the chin and back into the dribble
+    fakeRise: 0.14,
+    fakeHold: 0.05,
+    fakeReturn: 0.17,
+    fakeReleaseFeet: 0.45, // during the ball's return the feet are free again (pump fake -> drive)
+  },
+  finishRecover: { layup: 0.22, dunk: 0.24, floater: 0.18 },  // after landing a finish
   sideStep: {
     hopTime: 0.3, hopDist: 0.9, hopHeight: 0.12,
     balance: 0.15,             // balance cost of hopping into the shot

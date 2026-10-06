@@ -118,6 +118,8 @@ html, body {
 .shot-feedback.is-ok .shot-feedback__main { color: #ffc43d; }
 .shot-feedback.is-bad .shot-feedback__main { color: #ff5a4a; }
 .shot-feedback.is-shown { animation: feedback-pop 1.3s ease-out forwards; }
+.shot-feedback.is-win .shot-feedback__main { color: #ffc43d; }
+.shot-feedback.is-win.is-shown { animation: feedback-pop 2.6s ease-out forwards; }
 
 @keyframes feedback-pop {
   0%   { opacity: 0; transform: translateX(-50%) scale(0.7); }
@@ -303,3 +305,19 @@ html, body {
 }
 .hud-toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
 /* (the toast's bottom is set from the controls bar's height in ui.js) */
+
+/* Development: the running reference scenario (?scenario=...) */
+.scenario-label {
+  position: absolute;
+  left: 50%;
+  top: 58px;
+  transform: translateX(-50%);
+  max-width: 92vw;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(10, 14, 24, 0.7);
+  color: #e8ecf4;
+  font: 12px/1.4 Menlo, Consolas, monospace;
+  text-align: center;
+  pointer-events: none;
+}

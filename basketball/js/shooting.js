@@ -62,9 +62,9 @@ ISO.ShootingSystem = class {
 
       // Pump fake (seconds since the fake began)
       fakeTopPoint: [0.12, 0.34, 1.62], // ball at the chin: sells the shot
-      fakeRise: 0.17,
-      fakeHold: 0.07,
-      fakeReturn: 0.22,
+      fakeRise: ISO.OFFENSE.jumpShot.fakeRise,
+      fakeHold: ISO.OFFENSE.jumpShot.fakeHold,
+      fakeReturn: ISO.OFFENSE.jumpShot.fakeReturn,
 
       // Accuracy (aim error at the rim, meters). See shotSpread().
       accuracy: {
@@ -85,7 +85,7 @@ ISO.ShootingSystem = class {
     }, options);
     const s = this.settings;
     s.land = s.takeoff + s.airTime;
-    s.end = s.land + 0.35;
+    s.end = s.land + ISO.OFFENSE.jumpShot.landRecover;
     s.fakeEnd = s.fakeRise + s.fakeHold + s.fakeReturn;
 
     // Public state: shots
@@ -567,7 +567,9 @@ ISO.ShootingSystem = class {
     const d = this.drive;
     d.facing = this._facingToBasket(loco);
     d.velocity.set(0, 0, 0);
-    d.weight = f.t < s.fakeEnd - 0.08 ? 0.75 : 0.3;
+    // planted while the ball goes up; free to go as it comes back down
+    const back = s.fakeRise + s.fakeHold;
+    d.weight = f.t < back ? 0.75 : 0.75 * (1 - Math.min(1, (f.t - back) / (s.fakeReturn * ISO.OFFENSE.jumpShot.fakeReleaseFeet)));
 
     if (f.t >= s.fakeEnd) {
       this.isPumpFaking = false;

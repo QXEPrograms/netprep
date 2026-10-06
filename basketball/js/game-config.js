@@ -18,15 +18,16 @@ ISO.GAMEFLOW = {
 
   // ---- pace after a shot -------------------------------------------------------
   // The physical result plays out for this long before the transition starts.
-  makeResetDelay: 1.0,    // after the basket is detected (ball drops through the net)
-  missResetDelay: 0.75,   // after the miss is confirmed (bounce / fall away)
-  blockResetDelay: 1.0,   // after a blocked shot is confirmed a miss (see the deflection)
+  // Pickup pace: a short beat to read the result, then straight on.
+  makeResetDelay: 0.85,   // after the basket is detected (ball drops through the net)
+  missResetDelay: 0.6,    // after the miss is confirmed (bounce / fall away)
+  blockResetDelay: 0.8,   // after a blocked shot is confirmed a miss (see the deflection)
   // The transition itself: a quick fade hides the reset, then a short settle
   // with the ball already in the new ball handler's hands before input is live.
   useFade: true,
-  fadeOut: 0.2,
-  fadeIn: 0.25,
-  startDelay: 0.4,        // POSSESSION_START: players set, ball live in the dribble, input off
+  fadeOut: 0.15,
+  fadeIn: 0.2,
+  startDelay: 0.3,        // POSSESSION_START: players set, ball live in the dribble, input off
   get transitionDuration() { return this.fadeOut + this.startDelay; },
 
   // ---- when is a miss a miss ------------------------------------------------------
@@ -54,11 +55,11 @@ ISO.GAMEFLOW = {
     defenseGap: 1.4,
   },
 
-  // ---- rules (foundation only: nothing ends the game yet) ------------------------------
-  // Points per make come from ISO.CONFIG.scoring (inside / outside the arc).
-  // The intended game is first to 11 with 1s and 2s; set CONFIG.scoring to
-  // { inside: 1, outside: 2 } to switch.
-  rules: { targetScore: 11, makeItTakeIt: true },
+  // ---- rules -------------------------------------------------------------------------
+  // First to 11, 1s inside the arc and 2s outside (ISO.CONFIG.scoring), make-it-
+  // take-it. When a team gets there: a short "wins" beat, scores back to 0-0
+  // and the next game starts with the losing team's ball.
+  rules: { targetScore: 11, makeItTakeIt: true, gameOverDelay: 2.6, newGameBall: 'loser' },
 
   // ---- development ---------------------------------------------------------------------
   // ?controlball: your keyboard always drives whoever has the ball (the other

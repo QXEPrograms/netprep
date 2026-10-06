@@ -94,16 +94,20 @@ ISO.Game = class {
 
     this.ui = new ISO.UI(document.getElementById('hud'), { role: 'offense', teams: this.roster.teams, roster: this.roster });
     this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
+    this.events.on('gameWon', (e) => this.ui.showWin(e));
     if (ISO.CONFIG.debugPhysics) {
       const hud = document.getElementById('hud');
       this.offenseDebug = new ISO.OffenseDebug(this.scene, this.roster.players[0].offense, hud);
       if (this.roster.players[0].defense) this.defenseDebug = new ISO.DefenseDebug(this.scene, this.roster.players[0].defense, hud);
-      this.possessionDebug = new ISO.PossessionDebug(this.possession, this.roster, this.scoring, hud);
+      this.possessionDebug = new ISO.PossessionDebug(this.possession, this.roster, this.scoring, hud, this);
     }
 
     // ?defenseplayer: start on defense (the CPU's team has the ball first).
     const first = ISO.DEFENSE.enabled && ISO.DEFENSE.playerControlsDefense ? ISO.TEAM_B : GF.firstPossession;
     this._focus = new THREE.Vector3();
+    // ?scenario=A..S: a repeatable reference situation at every possession start.
+    this.scenario = ISO.ScenarioRunner.fromUrl();
+    if (this.scenario.active) this.ui.setScenarioLabel(this.scenario.label);
     this.possession.begin(first);
     this.ball.update(0);
 
@@ -157,6 +161,8 @@ ISO.Game = class {
         p.bot.startPossession();
       }
     }
+    // A reference scenario re-places everyone (or restarts with the right team).
+    if (this.scenario && this.scenario.apply(this)) return;
     if (this.offenseDebug) this.offenseDebug.p = this.player;
     if (this.defenseDebug && this.defender) this.defenseDebug.d = this.defender;
     if (this.ui) this.ui.setRole(this.humanRole);
@@ -175,6 +181,7 @@ ISO.Game = class {
     // writes the same kind of intent.
     for (const p of defense) if (p.controlSource === ISO.CONTROL.LOCAL) this._readDefenseInput(p);
     this._readBotKeys();
+    if (this.scenario.active && this.input.consumePress('scenarioReset')) P.devReset(P.offenseTeamId);
     for (const p of offense) if (p.bot && p.controlSource === ISO.CONTROL.CPU && P.inputEnabled) p.bot.update(dt);
     // Simulation: defenders move, ball handlers move (contact right after),
     // then defenders pose (hands/blocks/contest) before the ball steps.
@@ -204,19 +211,12 @@ ISO.Game = class {
     if (this.possessionDebug) this.possessionDebug.update();
   }
 
-  // Camera: frames the possession. On offense (you have the ball): the ball
-  // handler pulled toward their defender and the rim. On defense: both
-  // players, weighted toward you. Its angle never changes, so WASD keeps
-  // meaning the same thing on either end.
+  // Camera: frames the possession — ball handler + defender + basket, from
+  // behind the offense — whichever end you are playing (camera.js). Its angle
+  // only drifts slowly, so WASD keeps meaning the same thing on either end.
   _frameCamera(dt) {
-    const h = this.player, d = this.defender, me = this.localPlayer;
-    if (me.role === 'defense' && d) {
-      this._focus.lerpVectors(h.position, me.defense.position, 0.55);
-      this.cameraController.setFocus(this._focus);
-    } else {
-      const L = h.locomotion;
-      this.cameraController.frame(h.position, d ? d.position : null, L.attack || 0, L.orientation ? L.orientation.beaten : false, dt);
-    }
+    const h = this.player, d = this.defender, L = h.locomotion;
+    this.cameraController.frame(h.position, d ? d.position : null, L.attack || 0, L.orientation ? L.orientation.beaten : false, dt);
   }
 
   // Your keys -> your defender's input intent (the same plain intent a remote

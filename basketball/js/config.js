@@ -34,11 +34,11 @@ ISO.CONFIG = {
     boardBottom: 2.9,
     boardThickness: 0.03,
   },
-  // Points per made shot, by where the shooter released it.
-  // (The original design used 1 / 2; change these two numbers to switch.)
+  // Points per made shot, by where the shooter released it: the 1v1 game is
+  // played with 1s and 2s (first to 11, see GAMEFLOW.rules).
   scoring: {
-    inside: 2,             // inside the three-point line
-    outside: 3,            // on or beyond the three-point line
+    inside: 1,             // inside the arc
+    outside: 2,            // on or beyond the arc
   },
   colors: {
     background: 0x0b0f1a,
