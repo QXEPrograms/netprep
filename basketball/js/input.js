@@ -11,6 +11,7 @@ ISO.Input = class {
       sprint: ['ShiftLeft', 'ShiftRight'],
       crossover: ['KeyE'],
       stepBack: ['KeyQ'],
+      shoot: ['Space'],
     };
     // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
     this.presses = new Set();
@@ -47,6 +48,10 @@ ISO.Input = class {
       if (this.presses.delete(code)) hit = true;
     }
     return hit;
+  }
+
+  isDown(action) {
+    return this.pressed(action);
   }
 
   isSprinting() {

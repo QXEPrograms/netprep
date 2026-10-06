@@ -99,6 +99,26 @@ ISO.DribbleController = class {
     return true;
   }
 
+  // Stop dribbling (e.g. the ball is gathered for a shot).
+  stop() {
+    this.active = false;
+  }
+
+  // Start dribbling again with the ball in `hand`, at the top of the bounce.
+  resume(hand = 'right') {
+    this.active = true;
+    this.hand = hand;
+    this.mode = MODES.DRIBBLE;
+    this.phase = 0;
+    this.isCrossingOver = false;
+    this.crossoverProgress = 0;
+    this.cooldown = 0;
+    this._x = null;
+    this._frameYaw = null;
+    this._lead.set(0, 0, 0);
+    this._leadTarget.set(0, 0, 0);
+  }
+
   // mover: { position, facing, velocity, speed, runSpeed, sprintSpeed }
   update(dt, mover) {
     this.crossoverCompleted = false;

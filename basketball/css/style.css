@@ -14,3 +14,102 @@ html, body {
 #game canvas {
   display: block;
 }
+
+/* ---- HUD overlay ------------------------------------------------------- */
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: "Arial Black", "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+}
+
+/* Shot meter: vertical bar beside the shooter */
+.shot-meter {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 110px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(10, 14, 24, 0.72);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85), 0 4px 14px rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.shot-meter.is-visible { opacity: 1; }
+
+.shot-meter__track {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 7px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+}
+.shot-meter__zone { position: absolute; left: 0; right: 0; }
+.shot-meter__zone--early,
+.shot-meter__zone--late { background: rgba(255, 196, 61, 0.28); }
+.shot-meter__zone--perfect {
+  background: rgba(46, 230, 120, 0.55);
+  box-shadow: inset 0 1px 0 #3dff8c, inset 0 -1px 0 #3dff8c;
+}
+.shot-meter__fill {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 0;
+  height: 0;
+  border-radius: 4px;
+  background: #ffffff;
+  opacity: 0.92;
+}
+.shot-meter__marker {
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  height: 3px;
+  margin-bottom: -1px;
+  background: #ffffff;
+  opacity: 0;
+}
+.shot-meter.is-perfect .shot-meter__fill { background: #2ee678; }
+.shot-meter.is-ok .shot-meter__fill { background: #ffc43d; }
+.shot-meter.is-bad .shot-meter__fill { background: #ff5a4a; }
+.shot-meter.is-perfect { box-shadow: 0 0 0 2px #2ee678, 0 0 18px rgba(46, 230, 120, 0.8); }
+
+/* Release feedback */
+.shot-feedback {
+  position: absolute;
+  left: 50%;
+  top: 7%;
+  transform: translateX(-50%);
+  text-align: center;
+  opacity: 0;
+  white-space: nowrap;
+}
+.shot-feedback__main {
+  font-size: clamp(28px, 6vw, 56px);
+  letter-spacing: 0.04em;
+  color: #fff;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35), 0 0 22px rgba(0, 0, 0, 0.5);
+}
+.shot-feedback__sub {
+  margin-top: 2px;
+  font-size: clamp(11px, 1.6vw, 15px);
+  letter-spacing: 0.3em;
+  color: rgba(255, 255, 255, 0.85);
+}
+.shot-feedback.is-perfect .shot-feedback__main { color: #2ee678; }
+.shot-feedback.is-ok .shot-feedback__main { color: #ffc43d; }
+.shot-feedback.is-bad .shot-feedback__main { color: #ff5a4a; }
+.shot-feedback.is-shown { animation: feedback-pop 1.3s ease-out forwards; }
+
+@keyframes feedback-pop {
+  0%   { opacity: 0; transform: translateX(-50%) scale(0.7); }
+  12%  { opacity: 1; transform: translateX(-50%) scale(1.08); }
+  22%  { transform: translateX(-50%) scale(1); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+}

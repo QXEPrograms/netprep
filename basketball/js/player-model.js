@@ -21,6 +21,8 @@ ISO.PlayerModel = class {
     this.stride = 0;    // smoothed 0..1 amount of running pose
     this.stance = 0;    // smoothed 0..1 dribbling stance
     this._qFree = new THREE.Quaternion();
+    this._xfCur = [];
+    this._xf = 0;
     this._ik = {
       d: new THREE.Vector3(), pole: new THREE.Vector3(), u: new THREE.Vector3(),
       n: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(),
@@ -151,7 +153,8 @@ ISO.PlayerModel = class {
     const k = 1 - Math.exp(-10 * dt);
     this.stride += (moveAmt - this.stride) * k;
     // Dribbling stance: knees bent, chest over the ball.
-    this.stance += ((pose.dribble ? 1 : 0) - this.stance) * k;
+    const stanceTarget = pose.dribble ? (pose.dribble.stance ?? 1) : 0;
+    this.stance += (stanceTarget - this.stance) * k;
 
     // Advance the cycle by distance travelled so feet don't skate.
     const strideLen = 1.25 + 0.55 * sprintAmt; // meters per half-cycle
@@ -200,7 +203,94 @@ ISO.PlayerModel = class {
     this.head.rotation.x = -this.lean * 0.6;
 
     if (pose.stepBack) this._poseStepBack(pose.stepBack);
+    if (pose.shot) this._poseShot(pose.shot);
+    this._crossfade(dt, pose.shot ? 'shot' : pose.stepBack ? 'stepBack' : 'base');
     this._poseArms(dt, pose.dribble);
+  }
+
+  // World position of a hand (side: +1 character right, -1 left).
+  getHandWorld(side, out) {
+    this.root.updateMatrixWorld(true);
+    const arm = this.arms.find((a) => a.side === -side);
+    return arm.elbow.localToWorld(out.set(0, -0.29, 0));
+  }
+
+  // Jump shot legs/body. Keys are placed on the shot's own timeline:
+  // [time, hip, knee, torsoLean] for both legs (shooting-side foot slightly ahead).
+  _poseShot({ t, gatherEnd, takeoff, land, end, jumpY }) {
+    const keys = [
+      [0,              -0.40, 0.80, 0.22],  // dribble stance
+      [gatherEnd,      -0.45, 0.90, 0.18],  // gather
+      [takeoff,        -0.62, 1.25, 0.20],  // dip
+      [takeoff + 0.09, -0.06, 0.10, 0.02],  // legs extend: jump
+      [land - 0.12,    -0.22, 0.40, 0.00],  // slight tuck in the air
+      [land,           -0.15, 0.30, 0.02],  // reach for the floor
+      [land + 0.08,    -0.55, 1.05, 0.15],  // absorb the landing
+      [end,            -0.12, 0.25, 0.06],  // relaxed
+    ];
+    const k = sampleKeys(keys, t);
+    const w = smoothstep(0, 0.1, t) * (1 - smoothstep(end - 0.12, end, t));
+    if (w <= 0) return;
+    const air = smoothstep(takeoff + 0.03, takeoff + 0.1, t) * (1 - smoothstep(land - 0.08, land, t));
+
+    this.legs.forEach((leg) => {
+      const stagger = leg.side < 0 ? -0.06 : 0.04; // character right (local -x) slightly forward
+      const hip = k[1] + stagger, knee = k[2];
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, hip, w);
+      leg.hip.rotation.z = lerp(leg.hip.rotation.z, leg.side * 0.04, w);
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, knee, w);
+      const flat = -(hip + knee) * 0.9;
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, lerp(flat, 0.45, air), w); // toes point down in the air
+    });
+
+    const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
+    const grounded = reach(k[1] - 0.06, k[2]) + 0.0675 - 0.92;
+    this.body.position.y = lerp(this.body.position.y, grounded + jumpY, w);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, k[3], w);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0.1, w);    // square up, shooting (right) shoulder slightly forward
+    this.body.rotation.z = lerp(this.body.rotation.z, 0, w);
+  }
+
+  // When the pose source changes (e.g. a shot starts during a step-back
+  // landing), ease from last frame's legs/body over a short window instead of
+  // snapping to the new source.
+  _crossfade(dt, source) {
+    const cur = this._poseValues(this._xfCur);
+    if (this._xfSource !== undefined && source !== this._xfSource) {
+      this._xfFrom = this._xfLast.slice();
+      this._xf = 1;
+    }
+    this._xfSource = source;
+    if (this._xf > 0) {
+      const a = this._xf * this._xf * (3 - 2 * this._xf);
+      for (let i = 0; i < cur.length; i++) cur[i] = lerp(cur[i], this._xfFrom[i], a);
+      this._applyPoseValues(cur);
+      this._xf = Math.max(0, this._xf - dt / 0.15);
+    }
+    this._xfLast = cur.slice();
+  }
+
+  _poseValues(out = []) {
+    let i = 0;
+    for (const leg of this.legs) {
+      out[i++] = leg.hip.rotation.x; out[i++] = leg.hip.rotation.z;
+      out[i++] = leg.knee.rotation.x; out[i++] = leg.ankle.rotation.x;
+    }
+    out[i++] = this.body.position.y;
+    out[i++] = this.torso.rotation.x;
+    out[i++] = this.torso.rotation.y;
+    return out;
+  }
+
+  _applyPoseValues(v) {
+    let i = 0;
+    for (const leg of this.legs) {
+      leg.hip.rotation.x = v[i++]; leg.hip.rotation.z = v[i++];
+      leg.knee.rotation.x = v[i++]; leg.ankle.rotation.x = v[i++];
+    }
+    this.body.position.y = v[i++];
+    this.torso.rotation.x = v[i++];
+    this.torso.rotation.y = v[i++];
   }
 
   // Step-back: keyed leg poses blended over the normal run/stance pose.

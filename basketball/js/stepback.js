@@ -115,6 +115,17 @@ ISO.StepBackMove = class {
     return d;
   }
 
+  // End the move now (e.g. a shot starts during the landing). Counts as completed.
+  endEarly() {
+    if (!this.isSteppingBack) return;
+    this.isSteppingBack = false;
+    this.stepBackPhase = null;
+    this.stepBackCompleted = true;
+    this.stepBackCount++;
+    this.timeSinceStepBack = 0;
+    this.cooldown = this.settings.cooldown;
+  }
+
   // Pose info for PlayerModel.
   getPose() {
     return this.isSteppingBack ? { u: this.stepBackProgress } : null;

@@ -41,6 +41,8 @@ ISO.Game = class {
     this.cameraController.setFocus(this.player.position);
     this.cameraController.snap();
 
+    this.ui = new ISO.UI(document.getElementById('hud'));
+
     this.clock = new THREE.Clock();
     window.addEventListener('resize', () => this.onResize());
     this.renderer.setAnimationLoop(() => this.tick());
@@ -59,6 +61,7 @@ ISO.Game = class {
     this.hoop.net.update(dt);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.update(dt);
+    this.ui.update(dt, this.player.shooting, this.cameraController.camera, this.player.position);
     this.renderer.render(this.scene, this.cameraController.camera);
   }
 };

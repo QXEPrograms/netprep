@@ -16,6 +16,8 @@ ISO.PlayerController = class {
     this.ball = ball;
     this.dribble = ball ? new ISO.DribbleController(ball) : null;
     this.stepBack = new ISO.StepBackMove();
+    this.shooting = ball ? new ISO.ShootingSystem(ball) : null;
+    this._shotWanted = false;    // Space pressed but the shot couldn't start yet
     if (ball) ball.holder = this;
     this._updateBallHandling(0);
 
@@ -35,32 +37,66 @@ ISO.PlayerController = class {
     this._updateBallHandling(dt);
   }
 
-  // Ball-handling moves. Presses are consumed every frame so a press during a
-  // move or its cooldown is dropped rather than queued. Moves never overlap:
-  // E is ignored during a step-back, Q is ignored during a crossover.
+  get hasBall() {
+    return !!this.ball && this.ball.holder === this;
+  }
+
+  // Ball-handling moves. E/Q presses are consumed every frame so a press during
+  // a move or its cooldown is dropped rather than queued. Moves never overlap:
+  // E is ignored during a step-back, Q during a crossover, and both during a
+  // shot. Space during a crossover (or a step-back's push) starts the shot as
+  // soon as that move allows it, if Space is still held.
   _handleMoves(dt) {
     const crossPressed = this.input.consumePress('crossover');
     const stepPressed = this.input.consumePress('stepBack');
+    const shootPressed = this.input.consumePress('shoot');
+    const shootHeld = this.input.isDown('shoot');
     if (!this.dribble) return;
-    const sb = this.stepBack, dr = this.dribble;
+    const sb = this.stepBack, dr = this.dribble, sh = this.shooting;
 
-    if (crossPressed && !sb.isSteppingBack) dr.requestCrossover();
-    if (stepPressed && !dr.isCrossingOver) sb.request(this.locomotion);
+    if (shootPressed && !sh.isShooting) this._shotWanted = true;
+    if (!shootHeld && !shootPressed) this._shotWanted = false;
+    const shotAllowed = this.hasBall && dr.active && !dr.isCrossingOver &&
+      (!sb.isSteppingBack || sb.stepBackPhase === 'land');
+    if (this._shotWanted && shotAllowed) {
+      this._shotWanted = false;
+      if (sb.isSteppingBack) sb.endEarly(); // flow straight from the landing into the shot
+      dr.stop();
+      sh.start(this.locomotion, (side, out) => this.model.getHandWorld(side, out));
+    }
 
-    // A step-back briefly takes over velocity/facing through Locomotion's drive
-    // hook; a crossover costs a little speed through speedScale. Movement
-    // physics themselves are unchanged.
-    this.locomotion.drive = sb.update(dt, this.locomotion);
+    if (!sh.isShooting && this.hasBall) {
+      if (crossPressed && !sb.isSteppingBack) dr.requestCrossover();
+      if (stepPressed && !dr.isCrossingOver) sb.request(this.locomotion);
+    }
+
+    // Moves steer the body through Locomotion's drive hook (step-back, shot) or
+    // speedScale (crossover). Movement physics themselves are unchanged.
+    const sbDrive = sb.update(dt, this.locomotion);
+    const shotDrive = sh.update(dt, this.locomotion, shootHeld);
+    this.locomotion.drive = shotDrive || sbDrive;
     this.locomotion.speedScale = dr.isCrossingOver ? dr.settings.xSpeedScale : 1;
     dr.leadScale = sb.isSteppingBack ? 0 : 1;
+
+    // No rebounds yet: once the shot is over and the ball has settled (or had
+    // plenty of time), hand it back so play can continue.
+    const ball = this.ball;
+    if (!sh.isShooting && ball.mode === ISO.Basketball.MODES.FREE && (ball.settled || ball.freeTime > 3)) {
+      ball.setControlled();
+      ball.holder = this;
+      dr.resume('right');
+    }
   }
 
-  // Order matters: the dribble places the ball from the body's new position,
-  // then the model poses its arm onto the ball.
+  // Order matters: ball systems place the ball from the body's new position,
+  // then the model poses its arms onto the ball.
   _updateBallHandling(dt) {
     const state = this._modelState();
     let pose = {};
-    if (this.dribble && this.ball.holder === this) {
+    if (this.shooting && this.shooting.isShooting) {
+      this.shooting.place(dt, this.locomotion);
+      pose = { dribble: this.shooting.getPose(), shot: this.shooting.getShotPose() };
+    } else if (this.dribble && this.hasBall) {
       this.dribble.update(dt, state);
       const stepBack = this.stepBack.getPose();
       if (stepBack) stepBack.frontSide = this.dribble.sideSign; // plant the ball-side foot
