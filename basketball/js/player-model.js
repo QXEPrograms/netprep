@@ -158,8 +158,23 @@ ISO.PlayerModel = class {
     const stanceTarget = pose.dribble ? (pose.dribble.stance ?? 1) : 0;
     this.stance += (stanceTarget - this.stance) * k;
 
+    // Basketball locomotion (offense): lean/weight/twist from the movement
+    // system. Absent for other characters -> the plain run cycle as before.
+    const lp = pose.loco || null;
+    // Direction of travel relative to the hips: sideways steps and backpedals
+    // get their own footwork instead of a forward run cycle.
+    const fv = Math.sin(state.facing) * state.velocity.x + Math.cos(state.facing) * state.velocity.z;
+    const lv = -Math.cos(state.facing) * state.velocity.x + Math.sin(state.facing) * state.velocity.z;
+    const den = Math.abs(fv) + Math.abs(lv) + 0.25;
+    const kf = 1 - Math.exp(-12 * dt);
+    this.latAmt = (this.latAmt ?? 0) + (Math.abs(lv) / den - (this.latAmt ?? 0)) * kf;
+    this.backAmt = (this.backAmt ?? 0) + ((fv < 0 ? -fv / den : 0) - (this.backAmt ?? 0)) * kf;
+    this.latSide = Math.abs(lv) > 0.3 ? Math.sign(lv) : (this.latSide || 1);
+
     // Advance the cycle by distance travelled so feet don't skate.
-    const strideLen = 1.25 + 0.55 * sprintAmt; // meters per half-cycle
+    const F = ISO.MOVEMENT ? ISO.MOVEMENT.feet : null;
+    const baseStride = lp ? lp.stride : 1.25;
+    const strideLen = lerp(baseStride + 0.55 * sprintAmt, F ? F.lateralStride : 0.55, lp ? this.latAmt : 0); // meters per half-cycle
     this.phase += (state.speed / strideLen) * Math.PI * dt;
 
     const s = this.stride;
@@ -169,24 +184,31 @@ ISO.PlayerModel = class {
     // (crouch < 0 = rising tall, e.g. the hesitation)
     const extra = pose.dribble ? pose.dribble.body : NO_BODY;
     const strideMul = extra.stride ?? 1;     // < 1 = short, choppy steps (spin, behind-the-back)
-    const swing = (0.55 + 0.35 * sprintAmt) * s * strideMul;
-    const flex = Math.max(0, 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * extra.crouch);
+    const latA = lp ? this.latAmt : 0, backA = lp ? this.backAmt : 0;
+    const swing = (0.55 + 0.35 * sprintAmt) * s * strideMul * (1 - latA);
+    const flex = Math.max(0, 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * (extra.crouch + (lp ? lp.crouch : 0)));
 
     // Hips can shift sideways (weight shift); the legs angle back so the feet
     // stay planted. sway > 0 = toward the character's right (local -x).
-    const sway = extra.sway || 0;
+    const sway = (extra.sway || 0) + (lp ? lp.sway : 0);
     const legLean = sway / 0.85;
     const wide = 0.05 * Math.abs(extra.crouch || 0);   // wider base when dipping
 
     // Legs: opposite phase; knee bends most while the leg swings forward.
+    const spread = F ? F.lateralSpread : 0.22;
+    const lead = this.latSide > 0 ? this.legs[0] : this.legs[1];       // legs[0] = character right
     this.legs.forEach((leg, i) => {
       const ph = p + (i === 0 ? 0 : Math.PI);
-      const sw = Math.sin(ph);
+      const sw = Math.sin(ph) * (1 - 2 * backA);                          // backpedal: the swing runs in reverse
+      // sideways: the lead foot steps out, the trail foot pushes then closes (never crosses)
+      const isLead = leg === lead, sp = Math.sin(p);
+      const out = latA * s * (isLead ? spread * Math.max(0, sp) : -0.5 * spread * Math.max(0, -sp));
+      const lift = latA * s * (isLead ? 0.3 * Math.max(0, sp) : 0.15 * Math.max(0, -sp));
       // Jab step: the leg on the jab side (character right = local -x) lifts and reaches.
       const jab = extra.jab ? Math.max(0, (leg.side < 0 ? 1 : -1) * extra.jab) : 0;
       // (the jab goes out to the side, not forward, so the knee stays clear of the ball)
-      leg.hip.rotation.set(-sw * swing - flex - 0.15 * jab, 0, legLean + leg.side * wide + leg.side * 0.22 * jab);
-      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 * strideMul + 0.15) * s + 2 * flex + 0.4 * jab;
+      leg.hip.rotation.set(-sw * swing - flex - 0.15 * jab - 0.5 * lift, 0, legLean + leg.side * wide + leg.side * 0.22 * jab + leg.side * out);
+      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 * strideMul * (1 - latA) + 0.15) * s + 2 * flex + 0.4 * jab + lift;
       leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex - 0.2 * jab;
     });
     this.body.position.x = -sway;
@@ -206,15 +228,21 @@ ISO.PlayerModel = class {
     const bob = Math.abs(Math.sin(p)) * 0.06 * s;
     this.body.position.y = bob - 0.85 * (1 - Math.cos(flex));
 
-    const targetLean = 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance + 0.1 * extra.crouch;
+    // With basketball locomotion the lean comes from the movement system
+    // (velocity + acceleration); otherwise from speed as before.
+    const targetLean = lp ? 0.16 * this.stance + 0.1 * extra.crouch
+      : 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance + 0.1 * extra.crouch;
     this.lean += (targetLean - this.lean) * k;
-    const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s)) * (extra.turnRoll ?? 1);
+    const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s)) * (extra.turnRoll ?? 1) * (lp ? 0.4 : 1);
     this.roll += (targetRoll - this.roll) * k;
-    this.torso.rotation.x = this.lean + 0.06 * (1 - s);
-    this.body.rotation.z = this.roll + extra.roll;
-    this.torso.rotation.y = Math.sin(p) * 0.12 * s * (1 - 0.5 * this.stance) // counter-rotate shoulders
-      - extra.twist;                                                       // +twist turns toward the character's right
-    this.head.rotation.y = -this.torso.rotation.y * 0.8;
+    this.torso.rotation.x = this.lean + 0.06 * (1 - s) + (lp ? lp.pitch : 0);
+    this.body.rotation.z = this.roll + extra.roll + (lp ? lp.roll : 0);
+    // Movement lean pivots near the hips (not the feet): the feet push out to
+    // the side and the torso stays over the physical body.
+    if (lp && lp.pivot) this.body.position.x += lp.pivot * Math.sin(lp.roll);
+    const runSway = Math.sin(p) * 0.12 * s * (1 - 0.5 * this.stance) * (1 - latA);  // shoulders counter the stride
+    this.torso.rotation.y = runSway - extra.twist + (lp ? lp.twist : 0);   // +twist (extra) turns toward the character's right
+    this.head.rotation.y = -runSway * 0.8 + (lp ? lp.head : 0);
     this.head.rotation.x = -this.lean * 0.6;
 
     if (pose.stepBack) this._poseStepBack(pose.stepBack);

@@ -263,6 +263,7 @@ ISO.DefenderController = class {
     const at = (lat, fw, y, out) => out.copy(P).addScaledVector(right, lat).addScaledVector(fwd, fw).setY(y + jy);
     const bs = this._ballSide();
     const raise = this.handRaise;
+    this._closeToOpponent = P.distanceTo(this.opponent.locomotion.position) < 1.1;
     const A = ISO.DEFENSE.arms;
     // Contest arm: reach from the shoulder toward the ball (above it while it's
     // still in the shooter's hands), leaning up. The target is deliberately
@@ -296,12 +297,14 @@ ISO.DefenderController = class {
         }
         h.target.lerp(reach, raise);
       }
-      h.weight = run ? 0 : 1;
+      // running: arms swing free, except shoulder to shoulder with the ball
+      // handler (then they stay on targets that keep them out of his chest)
+      h.weight = run ? (this._closeToOpponent ? 1 : 0) : 1;
     }
     // Keep the hands out of the ball handler's chest when they're right on top of us.
     const om = this.opponent.model;
     om.root.updateMatrixWorld(true);
-    for (const h of this.hands) pushOutOfBox(h.target, om.torso, 0.26, 0.22 + 0.07, 0.25, 0.12 + 0.07, this._tmp);
+    for (const h of this.hands) pushOutOfBox(h.target, om.torso, 0.26, 0.22 + 0.11, 0.25 + 0.04, 0.12 + 0.11, this._tmp);
     // Crouch: deep stance; sink on the jump load, stretch tall in the air,
     // absorb the landing.
     const js = L.jumpState;

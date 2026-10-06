@@ -298,9 +298,24 @@ ISO.DribbleController = class {
     this._runAmt = (this._runAmt ?? runAmt) + (runAmt - (this._runAmt ?? runAmt)) * ka;
     this._sprintAmt = (this._sprintAmt ?? sprintAmt) + (sprintAmt - (this._sprintAmt ?? sprintAmt)) * ka;
 
+    // Movement context (basketball locomotion): how committed the attack is
+    // and whether the player is giving ground. Smoothed like the speed blends.
+    const MD = ISO.MOVEMENT && ISO.MOVEMENT.dribble;
+    const attackRun = clamp01((mover.attack || 0) / 0.5);
+    const retreat = clamp01(-(mover.forwardSpeed || 0) / 2);
+    this._attackAmt = (this._attackAmt ?? attackRun) + (attackRun - (this._attackAmt ?? attackRun)) * ka;
+    this._retreatAmt = (this._retreatAmt ?? retreat) + (retreat - (this._retreatAmt ?? retreat)) * ka;
+    const pressure = clamp01(mover.pressure || 0);
+    this._pressureAmt = (this._pressureAmt ?? pressure) + (pressure - (this._pressureAmt ?? pressure)) * ka;
+    const lateral = clamp01(Math.abs(mover.lateralSpeed || 0) / 3);
+    this._lateralAmt = (this._lateralAmt ?? lateral) + (lateral - (this._lateralAmt ?? lateral)) * ka;
+
     // Smoothly retune rhythm and height so speed changes never pop the ball.
+    // Moving at size-up: a quick controlled rhythm; driving/sprinting: a
+    // longer push dribble (not just "faster with speed").
     const k = 1 - Math.exp(-6 * dt);
-    const targetFreq = lerp(lerp(s.freqStill, s.freqRun, this._runAmt), s.freqSprint, this._sprintAmt);
+    const moveFreq = MD ? lerp(MD.freqControlled, MD.freqDrive, this._attackAmt) : s.freqRun;
+    const targetFreq = lerp(lerp(s.freqStill, moveFreq, this._runAmt), MD ? MD.freqSprint : s.freqSprint, this._sprintAmt);
     const targetTop = lerp(lerp(s.topStill, s.topRun, this._runAmt), s.topSprint, this._sprintAmt);
     this.freq += (targetFreq - this.freq) * k;
     this.top += (targetTop - this.top) * k;
@@ -309,7 +324,8 @@ ISO.DribbleController = class {
 
     // Velocity lead pushes the ball ahead near the floor when moving
     // (smoothed so a sudden stop, e.g. at a wall, eases the ball back in).
-    this._leadTarget.copy(mover.velocity).multiplyScalar(s.lead * this.leadScale).clampLength(0, s.maxLead);
+    const leadT = MD ? lerp(MD.leadControlled, MD.leadDrive, Math.max(this._attackAmt, this._sprintAmt)) * (1 - MD.pressureLead * this._pressureAmt) : s.lead;
+    this._leadTarget.copy(mover.velocity).multiplyScalar(leadT * this.leadScale).clampLength(0, s.maxLead);
     this._lead.lerp(this._leadTarget, dt === 0 ? 1 : 1 - Math.exp(-12 * dt));
 
     this._mover = mover;
@@ -524,8 +540,16 @@ ISO.DribbleController = class {
   }
 
   _forward() {
-    const s = this.settings;
-    return lerp(s.forwardStill, s.forwardSprint, this._sprintAmt) + 0.05 * this._runAmt;
+    const s = this.settings, MD = ISO.MOVEMENT && ISO.MOVEMENT.dribble;
+    let f = lerp(s.forwardStill, s.forwardSprint, this._sprintAmt) + 0.05 * this._runAmt;
+    if (MD) {
+      // push it out in front on a drive; keep it in closer when retreating
+      f = Math.max(f, lerp(f, MD.forwardDrive, (this._attackAmt || 0) * this._runAmt));
+      f -= MD.retreatPull * (this._retreatAmt || 0);
+      f += MD.lateralForward * (this._lateralAmt || 0);
+      f -= MD.pressurePull * (this._pressureAmt || 0);              // defender in your chest: protect it
+    }
+    return f;
   }
 
   _handLow() {
@@ -535,8 +559,10 @@ ISO.DribbleController = class {
   // Body-frame (lateral, forward, height) to world, adding velocity lead
   // scaled by how close to the floor the ball is.
   _toWorld(mover, lat, fwd, y, leadAmt, out) {
+    // handShift: the body's visible sideways lean/hip shift at hand height,
+    // so the ball stays with the hand when the ball handler leans into a move.
     return out.copy(mover.position)
-      .addScaledVector(this._right, lat)
+      .addScaledVector(this._right, lat + (mover.handShift || 0))
       .addScaledVector(this._fwd, fwd)
       .addScaledVector(this._lead, leadAmt)
       .setY(y);

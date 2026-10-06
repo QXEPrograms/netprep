@@ -63,6 +63,9 @@ ISO.Game = class {
       });
       this.scene.add(this.defender.object);
       this.player.afterMove = (dt) => this.defender.resolveContact(dt);
+      // The ball handler's primary matchup (orientation/stance context only;
+      // it never moves the ball handler).
+      this.player.locomotion.matchup = this.defender;
       this.defender.blocks.events = this.events;
       // Shots read the contest at their release (deterministic from player state).
       const contest = (type) => this.defender.contest.atReleaseValue(type);
@@ -97,6 +100,7 @@ ISO.Game = class {
       events: this.events,
     });
     this.ui = new ISO.UI(document.getElementById('hud'), { role: this.humanRole });
+    if (ISO.CONFIG.debugPhysics) this.offenseDebug = new ISO.OffenseDebug(this.scene, this.player, document.getElementById('hud'));
     this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
 
     this._focus = new THREE.Vector3();
@@ -130,7 +134,12 @@ ISO.Game = class {
     this.hoop.net.update(dt, this.ball);
     // Defending: keep both players in view, weighted toward you.
     if (this.humanRole === 'defense') this._focus.lerpVectors(this.player.position, this.defender.position, 0.55);
-    this.cameraController.setFocus(this.humanRole === 'defense' ? this._focus : this.player.position);
+    if (this.humanRole === 'defense') this.cameraController.setFocus(this._focus);
+    else {
+      const L = this.player.locomotion;
+      this.cameraController.frame(this.player.position, this.defender ? this.defender.position : null,
+        L.attack || 0, L.orientation ? L.orientation.beaten : false, dt);
+    }
     this.cameraController.update(dt);
     this.scoring.update(dt);
     this.ui.update(dt, {
@@ -141,6 +150,7 @@ ISO.Game = class {
       anchor: this.player.position,
     });
     if (this.defenseDebug) this.defenseDebug.update();
+    if (this.offenseDebug) this.offenseDebug.update();
   }
 
   // Your keys -> the defender's input intent (the same plain intent a remote

@@ -22,6 +22,22 @@ ISO.CameraController = class {
     this.snap();
   }
 
+  // Frame the possession rather than one player: the ball handler pulled
+  // toward their matchup, and pulled toward the rim — more once the matchup
+  // is beaten and the player is attacking. Only the focus point moves; the
+  // camera angle never rotates, so WASD keeps meaning the same thing.
+  frame(handler, matchup, attack, beaten, dt) {
+    const C = ISO.MOVEMENT && ISO.MOVEMENT.camera;
+    if (!C) { this.setFocus(handler); return; }
+    const f = (this._frameFocus || (this._frameFocus = new THREE.Vector3())).copy(handler);
+    if (matchup) f.lerp(matchup, C.defenderWeight);
+    const want = beaten && attack > 0.3 ? C.driveBasketBias : C.basketBias;
+    if (this._bias === undefined) this._bias = this.settings.basketBias;
+    this._bias += (want - this._bias) * (1 - Math.exp(-C.biasSmoothing * dt));
+    this.settings.basketBias = this._bias;
+    this.setFocus(f);
+  }
+
   // Set the point of interest (e.g. the player's position). Smoothed in update().
   setFocus(v) {
     this.focus.copy(v);

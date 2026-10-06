@@ -6,7 +6,10 @@ ISO.PlayerController = class {
     this.input = input;
     this.camera = camera;
 
-    this.locomotion = new ISO.Locomotion();
+    // Basketball locomotion: commitment blend, plants, squared/open
+    // orientation and lean (offensive-locomotion.js, tuned in movement-config.js).
+    this.locomotion = new ISO.OffensiveLocomotion();
+    this.bodyPose = new ISO.OffenseBodyPose(this.locomotion);
     this.locomotion.position.copy(startPosition);
     this.locomotion.facing = startFacing;
 
@@ -104,21 +107,29 @@ ISO.PlayerController = class {
   _updateBallHandling(dt) {
     const state = this._modelState();
     let pose = {};
+    // How much of the movement lean the body takes: all of it while dribbling,
+    // a little while a shot/finish/pass owns the body, none in the air.
+    const sh = this.shooting, fi = this.finishing;
+    const leanW = this.airborne ? 0 : (sh && sh.busy) ? 0.25 : (fi && fi.busy) ? 0.45 : (this.passing && this.passing.isPassing) ? 0.5
+      : this.stepBack.isSteppingBack ? 0.6
+      : this.dribble && this.dribble.currentMove === 'spin' ? 0.3 : 1;   // the spin turns the body under the lean
+    const loco = this.bodyPose.update(dt, leanW);
     if (this.finishing && this.finishing.busy) {
       this.finishing.place(dt, this.locomotion);
-      pose = { dribble: this.finishing.getPose(), finish: this.finishing.getFinishPose() };
+      pose = { dribble: this.finishing.getPose(), finish: this.finishing.getFinishPose(), loco };
     } else if (this.shooting && this.shooting.busy) {
       this.shooting.place(dt, this.locomotion);
-      pose = { dribble: this.shooting.getPose(), shot: this.shooting.getShotPose() };
+      pose = { dribble: this.shooting.getPose(), shot: this.shooting.getShotPose(), loco };
     } else if (this.passing && this.passing.isPassing) {
       this.passing.place(dt, this.locomotion);
-      pose = { dribble: this.passing.getPose(), pass: this.passing.getPassPose() };
+      pose = { dribble: this.passing.getPose(), pass: this.passing.getPassPose(), loco };
     } else if (this.dribble && this.hasBall) {
       this.dribble.update(dt, state);
       const stepBack = this.stepBack.getPose();
       if (stepBack) stepBack.frontSide = this.dribble.sideSign; // plant the ball-side foot
-      pose = { dribble: this.dribble.getPose(), stepBack };
+      pose = { dribble: this.dribble.getPose(), stepBack, loco };
     }
+    if (!pose.loco) pose.loco = loco;
     this.model.update(dt, state, pose);
   }
 
@@ -136,6 +147,14 @@ ISO.PlayerController = class {
     return out;
   }
 
+  // 0..1: the matchup is right in front of the ball (protect the dribble).
+  _pressure() {
+    const l = this.locomotion, o = l.orientation, MD = ISO.MOVEMENT && ISO.MOVEMENT.dribble;
+    if (!o || !l.matchup || !MD || o.matchupDepth <= 0) return 0;
+    const dist = Math.hypot(o.matchupDepth, o.matchupLateral);
+    return Math.max(0, Math.min(1, (MD.pressureRange - dist) / 0.5)) * Math.max(0, 1 - Math.abs(o.matchupLateral) / 0.8);
+  }
+
   _modelState() {
     const l = this.locomotion;
     return {
@@ -147,6 +166,13 @@ ISO.PlayerController = class {
       sprintSpeed: l.settings.sprintSpeed,
       sprinting: l.sprinting,
       turnSpeed: l.turnSpeed,
+      // movement context for the dribble rhythm
+      attack: l.attack || 0,
+      forwardSpeed: Math.sin(l.facing) * l.velocity.x + Math.cos(l.facing) * l.velocity.z,
+      planting: l.plantState === 'cut' || l.plantState === 'reversal',
+      handShift: this.bodyPose ? this.bodyPose.out.handShift || 0 : 0,
+      lateralSpeed: -Math.cos(l.facing) * l.velocity.x + Math.sin(l.facing) * l.velocity.z,
+      pressure: this._pressure(),
     };
   }
 };

@@ -108,7 +108,7 @@ ISO.DEFENSE = {
   // ---- contact ------------------------------------------------------------------
   contact: {
     radius: 0.31,          // each player's body circle
-    ballRadius: 0.14,      // the dribbled ball's circle (ball + a hand's clearance)
+    ballRadius: 0.17,      // the dribbled ball's circle (ball + clearance for the defender's knees)
     defenderShare: 0.42,   // share of the overlap the defender gives up when the attacker drives into it
     defenderPushShare: 0.88, // ...and when the defender is the one walking into the attacker
     softness: 0.7,         // fraction of the overlap corrected per frame (soft, not a wall)
