@@ -347,6 +347,17 @@ ISO.DefenderController = class {
       else a = A.tilt[3] * (u < 0.28 ? ease(u / 0.28) : u < 0.55 ? 1 : 1 - ease((u - 0.55) / 0.45));
       tv.addScaledVector(r.dir, a);
     }
+    // never tip the upper body into the ball handler: the lean toward them is
+    // limited to the room in front (contact keeps the feet apart, not the chest)
+    const o = this.opponent;
+    if (o && tv.lengthSq() > 1e-8) {
+      const ox = o.position.x - this.position.x, oz = o.position.z - this.position.z, gap = Math.hypot(ox, oz);
+      if (gap > 1e-3) {
+        const toward = (tv.x * ox + tv.z * oz) / gap;
+        const room = Math.asin(Math.max(0, Math.min(1, (gap - 0.82) / 1.3)));
+        if (toward > room) { const k = (toward - room) / gap; tv.x -= ox * k; tv.z -= oz * k; }
+      }
+    }
     const ang = tv.length();
     if (ang < 1e-4) { root.rotation.x = 0; root.rotation.z = 0; return; }
     const axis = this._reachT.set(tv.z / ang, 0, -tv.x / ang);    // up x dir: the top moves toward dir

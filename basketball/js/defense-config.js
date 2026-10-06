@@ -191,7 +191,7 @@ ISO.DEFENSE = {
     failedDrain: 0.32,     // balance lost when a reach comes up empty
     failedCommit: 0.7,     // and the weight left committed toward the reach side
     // CPU: asks to reach only with a real chance, never spamming
-    cpuReachDist: 1.0, cpuMinExposure: 0.45, cpuMinBalance: 0.65, cpuMinInterval: 1.4, cpuChance: 0.35,
+    cpuReachDist: 1.0, cpuMinExposure: 0.45, cpuMinBalance: 0.65, cpuMinInterval: 1.4, cpuChance: 0.35, cpuReadError: 0.25,
   },
 
   // ---- balance: how stable the defender is right now (0 broken .. 1 set) ----

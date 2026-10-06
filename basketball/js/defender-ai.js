@@ -272,10 +272,13 @@ ISO.DefenderAI = class {
     if ((state === 'guarding' || state === 'shading') && S.hasBall && !shotLive && !S.released && !Dd.reach &&
         this.time - this._lastReachDecision > SC.cpuMinInterval && Dd.balance.balance > SC.cpuMinBalance) {
       const b = Dd.ball.position;
-      if (Math.hypot(b.x - D.position.x, b.z - D.position.z) < SC.cpuReachDist &&
-          ISO.StealSystem.exposure(Dd.opponent, Dd) > SC.cpuMinExposure) {
+      // the CPU judges exposure by eye like a player does: one imperfect read
+      // per opportunity (a decent look at the ball, in reach)
+      const exp = ISO.StealSystem.exposure(Dd.opponent, Dd);
+      if (Math.hypot(b.x - D.position.x, b.z - D.position.z) < SC.cpuReachDist && exp > SC.cpuMinExposure - SC.cpuReadError) {
         this._lastReachDecision = this.time;
-        this.wantReach = this.reachRng() < SC.cpuChance;
+        const seen = exp + (this.reachRng() - 0.5) * 2 * SC.cpuReadError;
+        this.wantReach = seen > SC.cpuMinExposure && this.reachRng() < SC.cpuChance;
       }
     }
     this.defender.locomotion.speedScale = this.freeze > 0 ? 0.25 : 1;
