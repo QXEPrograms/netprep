@@ -22,6 +22,12 @@ ISO.PlayerController = class {
     if (this.finishing) this.finishing.setRng(() => this.shooting.rng());
     // Input -> moves, chaining, fatigue and contextual Space (offense-controller.js).
     this.offenseController = ball ? new ISO.OffenseController(this) : null;
+    // Body contact (only happens with a defender on the floor): airborne
+    // shots/finishes lose the drift that runs into the defender.
+    this.locomotion.onContact = (nx, nz) => {
+      if (this.shooting) this.shooting.absorbContact(nx, nz);
+      if (this.finishing) this.finishing.absorbContact(nx, nz);
+    };
     if (ball) ball.holder = this;
     this._updateBallHandling(0);
 
@@ -52,6 +58,12 @@ ISO.PlayerController = class {
   // Fatigue / chain tracking (OffenseState), for Gather and future systems.
   get offense() { return this.offenseController ? this.offenseController.offense : null; }
 
+  // Feet off the floor (jump shot or finish in the air).
+  get airborne() {
+    const sh = this.shooting, fi = this.finishing;
+    return !!((sh && sh.isShooting && sh.jumpHeight(sh.shotTime) > 0.02) || (fi && fi.busy && fi.jumpHeight(fi.t) > 0.02));
+  }
+
   // True while a move owns the ball and body (gather/shot, pump fake, finish, pass).
   get busy() {
     return this.shooting.busy || this.finishing.busy || this.passing.isPassing;
@@ -74,6 +86,10 @@ ISO.PlayerController = class {
     // No rebounds yet: once the ball has settled (or had plenty of time), hand
     // it back so play can continue.
     if (ball.mode === ISO.Basketball.MODES.FREE && (ball.settled || ball.freeTime > 4)) this._regainBall('right');
+    // Dev reset after a block (no loose-ball rules yet): let the deflection
+    // play out for a moment so it can be seen, then hand the ball back.
+    else if (ball.mode === ISO.Basketball.MODES.FREE && ball.blockedAt !== null && ISO.DEFENSE &&
+             ball.freeTime - ball.blockedAt > ISO.DEFENSE.hands.resetAfter) this._regainBall('right');
   }
 
   _regainBall(hand) {

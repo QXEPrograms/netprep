@@ -6,6 +6,9 @@
 //   orange line      ball handler -> basket
 //   green arrow      defender's facing; red arrow: facing-assist target
 //   grey circles     personal-space (contact) radius of both players
+//   hand spheres     the actual hand colliders (grey = inactive, red = can block)
+//   ball sphere      the ball's collision radius (white wire)
+//   magenta dot      shot release position; yellow star: block contact point
 //   text panel       state, facing error/lock, turn rate, reaction delay,
 //                    last reaction, contest values, contact
 (function () {
@@ -38,6 +41,18 @@ ISO.DefenseDebug = class {
     this.lane = line(0xff8a2a);
     this.facing = line(0x39e07a);
     this.facingTarget = line(0xff4a4a);
+    const wire = (r, color) => {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, depthTest: false }));
+      m.renderOrder = 7;
+      this.group.add(m);
+      return m;
+    };
+    this.handSpheres = defender.blocks.hands.map((h) => wire(h.radius, 0x9aa3b2));
+    this.ballSphere = wire(ISO.Basketball.RADIUS, 0xffffff);
+    this.releaseMark = wire(0.05, 0xff3cf0);
+    this.contactMark = wire(0.06, 0xffe23c);
+    this.releaseMark.visible = false;
+    this.contactMark.visible = false;
 
     this.panel = document.createElement('div');
     this.panel.className = 'defense-debug';
@@ -64,7 +79,22 @@ ISO.DefenseDebug = class {
     const ta = L.defensiveFacingAngle;
     set(this.facingTarget, v(L.position.x, 0.1, L.position.z), v(L.position.x + Math.sin(ta) * 0.8, 0.1, L.position.z + Math.cos(ta) * 0.8));
 
+    const B = d.blocks, ball = d.ball;
+    B.hands.forEach((h, i) => {
+      const m = this.handSpheres[i];
+      m.position.copy(h.cur);
+      m.material.color.setHex(h.active && B.active ? 0xff3c3c : h.active ? 0xff9a3c : 0x9aa3b2);
+    });
+    this.ballSphere.position.copy(ball.position);
+    const sh = d.opponent.shooting, fi = d.opponent.finishing;
+    if (sh.shotReleased || fi.shotReleased) {
+      this.releaseMark.position.copy(sh.shotReleased ? sh.releasePosition || ball.position : fi.releasePosition);
+      this.releaseMark.visible = true;
+    }
+    if (B.blockOccurred) { this.contactMark.position.copy(B.blockContactPoint); this.contactMark.visible = true; }
     const c = d.contest, rel = c.atRelease;
+    const v3 = (a) => a ? a.map((x) => x.toFixed(1)).join(',') : '-';
+    const lb = B.lastBlock;
     const deg = (r) => (r * 180 / Math.PI).toFixed(0).padStart(4) + '°';
     this.panel.textContent = [
       `DEFENSE  ${d.state.toUpperCase()}  (${L.mode}${L.isPlanting ? ', planting' : ''})`,
@@ -75,6 +105,10 @@ ISO.DefenseDebug = class {
       `contest ${c.contestStrength.toFixed(2)}  dist ${c.contestDistance.toFixed(2)}  angle ${deg(c.contestAngle)}  hand ${c.contestHandHeight.toFixed(2)}m`,
       `at release: ${rel ? `${rel.shotType} ${rel.strength}  (${rel.distance}m${rel.jumped ? ', jumped' : ''})` : '-'}`,
       `contact ${d.contact.touching ? 'YES' : 'no '}  overlap ${(d.contact.overlap * 100).toFixed(0)} cm`,
+      `jump ${L.jumpState.padEnd(6)} height ${L.jumpHeight.toFixed(2)} m  vy ${L.verticalVelocity.toFixed(2).padStart(5)} m/s  arm ${d.handRaise.toFixed(2)}`,
+      `hand-ball ${isFinite(B.handBallDistance) ? B.handBallDistance.toFixed(2) : '-'} m  block collision ${B.active ? 'ACTIVE' : 'off'}  blocks ${B.blocksCount}`,
+      `last block: ${lb ? `${lb.blockType} (${lb.blockHand}) @${lb.blockContactTime}s  gap ${lb.blockHandBallGap ?? lb.handBallGap}` : '-'}`,
+      `  ball v before ${lb ? v3(lb.velocityBefore) : '-'}  after ${lb ? v3(lb.blockDeflectionVelocity) : '-'}`,
     ].join('\n');
   }
 };

@@ -274,6 +274,35 @@ ISO.FinishSystem = class {
     };
   }
 
+  // Defense: the last moment before the release (the ball up at the rim on a
+  // dunk, extended on a layup/floater). Only here can a defender's hand touch it.
+  get inReleaseWindow() {
+    return this.busy && !this.ballReleased && this.t >= this.tl.release - ISO.OFFENSE.finishReleaseWindow;
+  }
+
+  // A defender's hand got to the ball at the release: it comes loose now with
+  // the motion it has (the contact itself is resolved by the ball physics).
+  knockLoose(loco) {
+    if (!this.inReleaseWindow) return false;
+    const b = this.ball;
+    this.releaseContest = this.contestProvider ? this.contestProvider(this.finishType) : 0;
+    this.releaseVelocity.copy(b.velocity);
+    b.setFree(this._p.copy(b.position), this.releaseVelocity, this._tmp.set(0, 0, 0), 'shot');
+    b.holder = null;
+    this.releasePosition.copy(b.position);
+    if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
+    this.ballReleased = true;
+    this.shotReleased = true;
+    this.shotCount++;
+    return true;
+  }
+
+  // Bumped by the defender in the air: lose the drift going into them.
+  absorbContact(nx, nz) {
+    const v = this._air, vn = v.x * nx + v.z * nz;
+    if (this._tookOff && vn > 0) { v.x -= nx * vn * 0.8; v.z -= nz * vn * 0.8; }
+  }
+
   // ---- accuracy & launch ---------------------------------------------------
 
   // 0..1: how good the approach is for this finish (1 = ideal).
@@ -321,7 +350,10 @@ ISO.FinishSystem = class {
 
   _launch(pos, loco) {
     const g = ISO.Basketball.GRAVITY, kind = this.finishType, rim = this.rim;
-    const spread = this.spreadFor(kind);
+    // Defense: contest at the release widens the finish spread (0 alone).
+    this.releaseContest = this.contestProvider ? this.contestProvider(kind) : 0;
+    const E = ISO.DEFENSE && ISO.DEFENSE.contestEffect;
+    const spread = this.spreadFor(kind) * (E ? 1 + (E[kind] || 0) * this.releaseContest : 1);
     const d0 = Math.hypot(rim.x - pos.x, rim.z - pos.z);
     const ux = d0 > 1e-4 ? (rim.x - pos.x) / d0 : 0, uz = d0 > 1e-4 ? (rim.z - pos.z) / d0 : -1;
     const depth = gauss(this.rng) * 1.1 * spread, lateral = gauss(this.rng) * 0.9 * spread;
@@ -349,7 +381,7 @@ ISO.FinishSystem = class {
     }
     const spin = this._tmp.set(-dz, 0, dx);
     if (spin.lengthSq() > 1e-8) spin.normalize().multiplyScalar(kind === 'dunk' ? 4 : 10);
-    this.ball.setFree(pos, vel, spin);
+    this.ball.setFree(pos, vel, spin, 'shot');
     this.ball.holder = null;
     this.releasePosition.copy(pos);
     if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);

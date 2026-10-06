@@ -28,6 +28,11 @@ ISO.Basketball = class {
     this.bounces = 0;                           // floor bounces since going free
     this.contacts = 0;                          // collision responses since going free
     this.world = null;                          // HoopPhysics (colliders + basket detection)
+    // Moving colliders that act on the free ball (e.g. a defender's hands):
+    // each has collide(ball, alpha, h), alpha = 0..1 through the current frame.
+    this.dynamicColliders = [];
+    this.flightKind = null;                     // why the ball is free: 'shot' | 'pass' | 'loose'
+    this.blockedAt = null;                      // freeTime of a block in this flight (null = none)
     this._acc = 0;
 
     this.object = new THREE.Group();          // positioned, not rotated
@@ -69,8 +74,10 @@ ISO.Basketball = class {
 
   // Release the ball into free flight from pos with velocity vel and spin
   // (angular velocity, rad/s).
-  setFree(pos, vel, spin) {
+  setFree(pos, vel, spin, kind = 'loose') {
     this.mode = ISO.Basketball.MODES.FREE;
+    this.flightKind = kind;
+    this.blockedAt = null;
     this.position.copy(pos);
     this.velocity.copy(vel);
     this.angularVelocity.copy(spin || this._tmp.set(0, 0, 0));
@@ -105,11 +112,17 @@ ISO.Basketball = class {
   _updateFree(dt) {
     if (dt <= 0) return;
     const STEP = ISO.Basketball.STEP;
-    this._acc += Math.min(dt, 0.25);
+    const span = Math.min(dt, 0.25);
+    this._acc += span;
+    let done = 0;
     while (this._acc >= STEP) {
       this._acc -= STEP;
       const n = Math.max(1, Math.ceil((this.velocity.length() * STEP) / 0.05));
-      for (let i = 0; i < n; i++) this._step(STEP / n);
+      for (let i = 0; i < n; i++) {
+        done += STEP / n;
+        this._alpha = Math.min(1, done / span);   // where in this frame the step lands
+        this._step(STEP / n);
+      }
     }
   }
 
@@ -127,6 +140,7 @@ ISO.Basketball = class {
     v.y -= g * h;
 
     const floorVy = v.y;
+    for (const c of this.dynamicColliders) c.collide(this, this._alpha ?? 1, h);
     if (world) {
       world.collide(this);
       world.netDrag(this, h);

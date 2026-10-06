@@ -14,7 +14,8 @@ ISO.ScoringSystem = class {
   // shooters: every system that can release a scoring shot (ShootingSystem,
   // FinishSystem). Each exposes shotReleased (frame flag), releaseFeet,
   // releaseTiming and shotType.
-  constructor({ shooting, shooters, hoop, ball }) {
+  constructor({ shooting, shooters, hoop, ball, events = null }) {
+    this.events = events;
     this.shooting = shooting;
     this.shooters = shooters || [shooting];
     this.shotId = 0;
@@ -65,12 +66,22 @@ ISO.ScoringSystem = class {
       };
       this.attempts++;
       if (isThree) this.threeAttempts++;
+      if (this.events) {
+        const p = sh.releasePosition, v = sh.releaseVelocity;
+        this.events.emit('shotReleased', {
+          shotType: this.pending.shotType, isThree,
+          position: p ? [+p.x.toFixed(3), +p.y.toFixed(3), +p.z.toFixed(3)] : null,
+          velocity: v ? [+v.x.toFixed(3), +v.y.toFixed(3), +v.z.toFixed(3)] : null,
+          contest: sh.releaseContest || 0,
+        });
+      }
     }
 
     const p = this.pending;
     if (!p) return;
     p.t += dt;
     const ball = this.ball;
+    if (ball.blockedAt !== null && ball.blockedAt !== undefined && ball.mode === ISO.Basketball.MODES.FREE) p.blocked = true;
     const onFloor = ball.position.y <= ball.radius + 0.002;
     if (this.hoop.basketMadeThisFrame) {
       this._resolve(true, this.hoop.shotWasSwish);
@@ -88,7 +99,8 @@ ISO.ScoringSystem = class {
       this.makes++;
       if (p.isThree) this.threeMakes++;
     }
-    this.lastResult = { id: p.id, made, swish, points, value: p.value, isThree: p.isThree, timing: p.timing, shotType: p.shotType };
+    this.lastResult = { id: p.id, made, swish, points, value: p.value, isThree: p.isThree, timing: p.timing, shotType: p.shotType, blocked: !!p.blocked };
+    if (made && this.events) this.events.emit('basketMade', { points, swish, shotType: p.shotType, blocked: !!p.blocked });
     this.resolvedThisFrame = this.lastResult;
   }
 };

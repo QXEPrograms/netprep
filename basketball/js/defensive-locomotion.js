@@ -6,7 +6,14 @@
 //     velocity:  Vector3  wanted ground velocity (m/s, world)
 //     faceTarget: Vector3 what the chest should track (normally the ball handler)
 //     allowRun:  bool     may turn the hips and run (recovering, closing out)
+//     jump:      bool     start a jump/contest this frame (ignored unless grounded)
 //   }
+//
+// Jump (plant -> crouch -> takeoff -> air -> land): a real vertical
+// velocity under gravity. Horizontal momentum at takeoff carries into the air
+// with only a little steering, so jumping while sliding or running drifts.
+// State: jumpState ('ground' | 'load' | 'air' | 'land'), jumpHeight (m, feet
+// off the floor), verticalVelocity, jumpCount.
 //
 // Key differences from offensive Locomotion:
 //   - Facing assist: the chest tracks faceTarget, NOT the travel direction, so
@@ -53,6 +60,27 @@ ISO.DefensiveLocomotion = class {
 
     this._plantT = 0;
     this._want = new THREE.Vector3();
+
+    this.jumpCfg = ISO.DEFENSE.jump;
+    this.jumpState = 'ground';
+    this.jumpHeight = 0;
+    this.verticalVelocity = 0;
+    this.jumpCount = 0;
+    this.jumpTime = 0;            // seconds in the current jump state
+    this.lastJumpPeak = 0;
+    this._carryRun = false;
+  }
+
+  get airborne() { return this.jumpState === 'air'; }
+
+  // Start a jump if standing on the floor (and not still absorbing a landing).
+  requestJump() {
+    if (this.jumpState !== 'ground') return false;
+    this.jumpState = 'load';
+    this.jumpTime = 0;
+    this.jumpCount++;
+    this.isPlanting = false;
+    return true;
   }
 
   get speed() { return Math.hypot(this.velocity.x, this.velocity.z); }
@@ -68,7 +96,29 @@ ISO.DefensiveLocomotion = class {
   }
 
   update(dt, intent) {
-    const s = this.settings;
+    const s = this.settings, J = this.jumpCfg;
+    if (intent.jump) this.requestJump();
+    this.jumpTime += dt;
+    const target0 = intent.faceTarget;
+    const toT0 = target0 ? Math.atan2(target0.x - this.position.x, target0.z - this.position.z) : this.facing;
+
+    // ---- jump phases own the body until the landing is absorbed ----
+    if (this.jumpState === 'load') {
+      // plant and sink: horizontal speed bleeds off into the floor
+      this.velocity.multiplyScalar(Math.pow(J.loadBrake, dt / J.loadTime));
+      this._integrate(dt);
+      if (this.jumpTime >= J.loadTime) this._takeoff();
+      this._face(dt, target0, toT0, 1);
+      return;
+    }
+    if (this.jumpState === 'air') {
+      this._updateAir(dt, intent);
+      this._face(dt, target0, toT0, J.airTurnScale);
+      return;
+    }
+    if (this.jumpState === 'land' && this.jumpTime >= J.landTime) this.jumpState = 'ground';
+    const landing = this.jumpState === 'land';
+
     const want = this._want.set(intent.velocity.x, 0, intent.velocity.z);
     const wantSpeed = want.length();
     const target = intent.faceTarget;
@@ -96,7 +146,7 @@ ISO.DefensiveLocomotion = class {
 
     // ---- wanted velocity, capped by direction ----
     if (wantSpeed > 1e-4) {
-      const cap = this.maxSpeedToward(want.x / wantSpeed, want.z / wantSpeed) * this.speedScale;
+      const cap = this.maxSpeedToward(want.x / wantSpeed, want.z / wantSpeed) * this.speedScale * (landing ? J.landSpeedScale : 1);
       if (wantSpeed > cap) want.multiplyScalar(cap / wantSpeed);
     }
 
@@ -122,20 +172,59 @@ ISO.DefensiveLocomotion = class {
       v.x += (dvx / dv) * step;
       v.z += (dvz / dv) * step;
     }
-    this.position.x += v.x * dt;
-    this.position.z += v.z * dt;
-    this._applyBounds();
+    this._integrate(dt);
     this.sprinting = this.mode === 'run';
+    this._face(dt, target, toT, 1);
+  }
 
-    // ---- facing assist ----
-    const F = this.facingCfg;
+  _integrate(dt) {
+    this.position.x += this.velocity.x * dt;
+    this.position.z += this.velocity.z * dt;
+    this._applyBounds();
+  }
+
+  _takeoff() {
+    const J = this.jumpCfg;
+    const speed = this.speed;
+    const h = J.height * (1 - J.movingLoss * Math.min(1, speed / 6));
+    this.verticalVelocity = Math.sqrt(2 * J.gravity * h);
+    this._carryRun = this.mode === 'run';
+    this.velocity.multiplyScalar(this._carryRun ? J.carryRun : J.carry);
+    this.jumpState = 'air';
+    this.jumpTime = 0;
+    this.lastJumpPeak = h;
+    this.mode = 'stance';
+  }
+
+  // Airborne: gravity on the height, momentum on the floor plane with only a
+  // little steering toward what the player/AI wants.
+  _updateAir(dt, intent) {
+    const J = this.jumpCfg, v = this.velocity;
+    this.jumpHeight += this.verticalVelocity * dt - 0.5 * J.gravity * dt * dt;
+    this.verticalVelocity -= J.gravity * dt;
+    const ctl = this._carryRun ? J.airControlRun : J.airControl;
+    const dvx = intent.velocity.x - v.x, dvz = intent.velocity.z - v.z, dv = Math.hypot(dvx, dvz);
+    if (dv > 1e-4) { const st = Math.min(dv, ctl * dt); v.x += dvx / dv * st; v.z += dvz / dv * st; }
+    this._integrate(dt);
+    if (this.jumpHeight <= 0) {
+      this.jumpHeight = 0;
+      this.verticalVelocity = 0;
+      this.jumpState = 'land';
+      this.jumpTime = 0;
+      v.multiplyScalar(0.6);       // feet stick: most momentum absorbed on landing
+    }
+  }
+
+  // ---- facing assist ----
+  _face(dt, target, toT, rateScale) {
+    const F = this.facingCfg, v = this.velocity;
     let goal;
     if (this.mode === 'run' && this.speed > 0.8) goal = Math.atan2(v.x, v.z);   // hips turned: face travel
     else goal = toT;
     if (target) this.defensiveFacingTarget.copy(target);
     this.defensiveFacingAngle = goal;
     const err = wrap(goal - this.facing);
-    const maxRate = (this.mode === 'run' ? F.turnRateRun : F.turnRate) * (this.isPlanting ? F.plantTurnScale : 1);
+    const maxRate = rateScale * (this.mode === 'run' ? F.turnRateRun : F.turnRate) * (this.isPlanting ? F.plantTurnScale : 1);
     const wantRate = Math.max(-maxRate, Math.min(maxRate, err * F.gain));
     const dr = wantRate - this.turnSpeed;
     this.turnSpeed += Math.sign(dr) * Math.min(Math.abs(dr), F.turnAccel * dt);
@@ -145,6 +234,7 @@ ISO.DefensiveLocomotion = class {
     this.facing = wrap(this.facing + step);
     this.defensiveFacingError = wrap(toT - this.facing);
     this.isDefensiveLocked = this.mode === 'stance' && Math.abs(this.defensiveFacingError) < F.lockError;
+    // (also locked while airborne/landing if square: the chest still tracks)
     this.defensiveTurnRate = this.turnSpeed;
 
     // body-frame velocity (for the slide/backpedal animation)

@@ -27,6 +27,12 @@ ISO.Game = class {
     this.cameraController.setAspect(container.clientWidth / container.clientHeight);
 
     this.input = new ISO.Input();
+    // Simulation results as plain events (UI listens; networking later).
+    this.events = new ISO.GameEvents();
+    // ?defenseplayer: you control the defender; a dev test bot drives the
+    // ball handler through a virtual input (controls depend on your role).
+    this.humanRole = ISO.DEFENSE.enabled && ISO.DEFENSE.playerControlsDefense ? 'defense' : 'offense';
+    this.offenseInput = this.humanRole === 'defense' ? new ISO.VirtualInput() : this.input;
     // Hoop collisions + made-basket detection for the free ball.
     this.hoopPhysics = new ISO.HoopPhysics();
     // The net is driven by the ball itself; rim hits add a shake.
@@ -37,7 +43,7 @@ ISO.Game = class {
     this.ball.world = this.hoopPhysics;
     this.ball.addTo(this.scene);
     this.player = new ISO.PlayerController({
-      input: this.input,
+      input: this.offenseInput,
       camera: this.cameraController.camera,
       ball: this.ball,
       startPosition: new THREE.Vector3(0, 0, 8.5), // top of the key
@@ -57,6 +63,15 @@ ISO.Game = class {
       });
       this.scene.add(this.defender.object);
       this.player.afterMove = (dt) => this.defender.resolveContact(dt);
+      this.defender.blocks.events = this.events;
+      // Shots read the contest at their release (deterministic from player state).
+      const contest = (type) => this.defender.contest.atReleaseValue(type);
+      this.player.shooting.contestProvider = contest;
+      this.player.finishing.contestProvider = contest;
+      if (this.humanRole === 'defense') {
+        this.defender.setControl('human');
+        this.offenseBot = new ISO.OffenseTestBot({ player: this.player, input: this.offenseInput, camera: this.cameraController.camera, defender: this.defender });
+      }
       if (ISO.CONFIG.debugPhysics) this.defenseDebug = new ISO.DefenseDebug(this.scene, this.defender, document.getElementById('hud'));
     }
 
@@ -79,9 +94,12 @@ ISO.Game = class {
       shooters: [this.player.shooting, this.player.finishing],
       hoop: this.hoopPhysics,
       ball: this.ball,
+      events: this.events,
     });
-    this.ui = new ISO.UI(document.getElementById('hud'));
+    this.ui = new ISO.UI(document.getElementById('hud'), { role: this.humanRole });
+    this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
 
+    this._focus = new THREE.Vector3();
     this.clock = new THREE.Clock();
     window.addEventListener('resize', () => this.onResize());
     this.renderer.setAnimationLoop(() => this.tick());
@@ -101,13 +119,18 @@ ISO.Game = class {
 
   // One simulation step (everything except rendering).
   step(dt) {
+    this.events.tick(dt);
+    if (this.humanRole === 'defense') this._readDefenseInput();
+    if (this.offenseBot) this.offenseBot.update(dt);
     if (this.defender) this.defender.update(dt);
     this.player.update(dt);
     if (this.defender) this.defender.updateVisual(dt);
     this.ball.update(dt);
     if (this.debugPassTarget) this.debugPassTarget.update(dt);
     this.hoop.net.update(dt, this.ball);
-    this.cameraController.setFocus(this.player.position);
+    // Defending: keep both players in view, weighted toward you.
+    if (this.humanRole === 'defense') this._focus.lerpVectors(this.player.position, this.defender.position, 0.55);
+    this.cameraController.setFocus(this.humanRole === 'defense' ? this._focus : this.player.position);
     this.cameraController.update(dt);
     this.scoring.update(dt);
     this.ui.update(dt, {
@@ -118,6 +141,18 @@ ISO.Game = class {
       anchor: this.player.position,
     });
     if (this.defenseDebug) this.defenseDebug.update();
+  }
+
+  // Your keys -> the defender's input intent (the same plain intent a remote
+  // player would send): move axes, run, jump/contest (Space), hands up (F).
+  _readDefenseInput() {
+    const I = this.input, hi = this.defender.humanInput;
+    const a = I.getMoveAxes();
+    hi.x = a.x; hi.y = a.y;
+    hi.sprint = I.isSprinting();
+    if (I.consumePress('shoot')) hi.jump = true;
+    hi.handsUp = I.isDown('pass');
+    for (let m = 0; m <= 7; m++) if (I.consumePress('bot' + m)) this.offenseBot.setMode(m);
   }
 };
 

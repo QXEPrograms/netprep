@@ -60,6 +60,7 @@ ISO.DefenderAI = class {
     this._carryVel = new THREE.Vector3();
     this.biteCount = 0;
     this._lastShotSeen = -99;
+    this._jumpDecision = null;
     this.beatenCount = 0;
 
     this._u = new THREE.Vector3();
@@ -93,6 +94,7 @@ ISO.DefenderAI = class {
       shooting: sh.isShooting && sh.shotCommitted && !sh.ballReleased,
       shotType: sh.shotType,
       shotJump: sh.isShooting ? sh.jumpHeight(sh.shotTime) : 0,
+      shotPhase: sh.isShooting ? sh.shotPhase : null,
       finishing: fi.busy && !fi.ballReleased,
       finishType: fi.busy ? fi.finishType : null,
       finishJump: fi.busy ? fi.jumpHeight(fi.t) : 0,
@@ -205,6 +207,7 @@ ISO.DefenderAI = class {
       state = Math.hypot(S.vx, S.vz) > 1.5 ? 'shading' : 'guarding';
     }
     if (shotLive || S.released) this._lastShotSeen = this.time;
+    else if (this.time - this._lastShotSeen > 0.5) this._jumpDecision = null;
     this._setState(state);
 
     // ---- intention ----
@@ -228,9 +231,16 @@ ISO.DefenderAI = class {
       if (len > 1e-3) v.multiplyScalar(sp / len);
       out.allowRun = state === 'closeout' && len > 2.0;
       this.handsUp = 1;
-      // jump with the shooter (as perceived, so usually a touch late)
-      const jumping = S.shotJump > 0.05 || S.finishJump > 0.1;
-      if (jumping && len < 1.6 && !this.defender.isJumping) this.wantJump = true;
+      // Decide to jump with the shooter, from what it can see (and as late as
+      // its reaction delay makes it). It only *asks* for a jump: whether the
+      // hand ever meets the ball is up to the physics.
+      const dS = Math.hypot(D.position.x - S.x, D.position.z - S.z);
+      const rising = S.shotPhase === 'rise' || S.shotPhase === 'release' || S.shotJump > 0.03 || S.finishJump > 0.05;
+      if (rising && dS < 1.9 && this._jumpDecision === null) {
+        // one decision per shot: jump, or stay down with a hand up
+        this._jumpDecision = this.rng() < (dS < 1.1 ? St.contestJumpChanceClose : St.contestJumpChance);
+      }
+      if (rising && dS < 1.9 && this._jumpDecision && !this.defender.isJumping) this.wantJump = true;
     } else {
       // Guard: match the perceived movement and close on the spot.
       v.set(S.vx * Pc.matchVelocity, 0, S.vz * Pc.matchVelocity);

@@ -380,8 +380,15 @@ ISO.ShootingSystem = class {
     // spread grows; even a green release picks up a little spread when the
     // shooter is clearly off balance (green window itself is unchanged).
     const bal = this.balance ?? 1;
-    if (spread > 0) spread *= 1 + (1 - bal) * 1.5;
-    else spread = Math.max(0, 0.9 - bal) * 0.12;
+    const con = this.releaseContest || 0, E = ISO.DEFENSE && ISO.DEFENSE.contestEffect;
+    if (spread > 0) {
+      spread *= 1 + (1 - bal) * 1.5;
+      if (E) spread *= 1 + E.offGreen * con;                 // contest: harder off green
+    } else {
+      spread = Math.max(0, 0.9 - bal) * 0.12;
+      // a green under a real contest is no longer automatic (light contests: untouched)
+      if (E) spread = Math.max(spread, Math.max(0, con - E.greenFrom) * E.greenSpread);
+    }
     if (spread <= 0) return { depth: 0, lateral: 0, spread: 0 };
     const bias = Math.sign(offset) * a.timingBias;
     return {
@@ -389,6 +396,38 @@ ISO.ShootingSystem = class {
       lateral: gauss(this.rng) * a.lateralScale * spread,
       spread,
     };
+  }
+
+  // Defense: the ball is in the release motion (the arm extension, the last
+  // instant before it leaves the hand). Only here can a defender's hand touch it.
+  get inReleaseWindow() {
+    return this.isShooting && !this.ballReleased && this.extendStart !== null && this.shotTime >= this.extendStart;
+  }
+
+  // A defender's hand met the ball during the release: it leaves the hand now,
+  // with the motion it has; the hand contact itself is then resolved by the
+  // ball physics (BlockSystem). Counts as a released (blocked) shot.
+  knockLoose(loco) {
+    if (!this.inReleaseWindow) return false;
+    const b = this.ball;
+    this.releaseContest = this.contestProvider ? this.contestProvider(this.shotType) : 0;
+    this.releaseVelocity.copy(b.velocity);
+    b.setFree(this._aim.copy(b.position), this.releaseVelocity, this._tmp.set(0, 0, 0), 'shot');
+    b.holder = null;
+    this.releasePosition.copy(b.position);
+    if (loco) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
+    this.ballReleased = true;
+    this.shotReleased = true;
+    this.shotCount++;
+    this._releaseT = this.t;
+    return true;
+  }
+
+  // Ball handler bumped while airborne: the carried drift loses the part going
+  // into the defender (no rigid stop, no teleport).
+  absorbContact(nx, nz) {
+    const v = this._takeoffVel, vn = v.x * nx + v.z * nz;
+    if (this._tookOff && vn > 0) { v.x -= nx * vn * 0.8; v.z -= nz * vn * 0.8; }
   }
 
   // Seed the shot randomness (for reproducible tests).
@@ -580,6 +619,9 @@ ISO.ShootingSystem = class {
     const rim = s.target;
     const d0 = Math.hypot(rim.x - pos.x, rim.z - pos.z);
 
+    // Defense: how contested the release is (0 with no defender). It only
+    // widens the aim spread below; the ball still flies to a physical target.
+    this.releaseContest = this.contestProvider ? this.contestProvider(this.shotType) : 0;
     const err = this.aimError(this.releaseOffset, d0, pos);
     this.aimOffset = err;
     const ux = d0 > 1e-4 ? (rim.x - pos.x) / d0 : 0, uz = d0 > 1e-4 ? (rim.z - pos.z) / d0 : 1;
@@ -604,7 +646,7 @@ ISO.ShootingSystem = class {
     const spin = this._tmp.set(0, 0, 0);
     if (d > 1e-4) spin.set(-dz / d, 0, dx / d).multiplyScalar(s.backspin);
 
-    this.ball.setFree(pos, vel, spin);
+    this.ball.setFree(pos, vel, spin, 'shot');
     this.ball.holder = null;
     this.releasePosition.copy(pos);
     if (loco) this.releaseFeet.set(loco.position.x, 0, loco.position.z);

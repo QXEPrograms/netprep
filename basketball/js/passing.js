@@ -168,7 +168,7 @@ ISO.PassingSystem = class {
     const vy = (tgt.y - pos.y + 0.5 * g * T * T) / T;
     this.passVelocity.set(dx / T, vy, dz / T);
     const spin = this._tmp.set(-dz, 0, dx).normalize().multiplyScalar(8); // light backspin
-    this.ball.setFree(pos, this.passVelocity, spin);
+    this.ball.setFree(pos, this.passVelocity, spin, 'pass');
     this.ball.holder = null;
     this._released = true;
     this.passReleased = true;
@@ -238,7 +238,7 @@ ISO.DebugPassTarget = class {
     const dx = to.x - from.x, dz = to.z - from.z, d = Math.hypot(dx, dz);
     const T = Math.max(0.2, d / 9);
     const v = new THREE.Vector3(dx / T, (to.y - from.y + 0.5 * g * T * T) / T, dz / T);
-    this.ball.setFree(from, v, new THREE.Vector3());
+    this.ball.setFree(from, v, new THREE.Vector3(), 'pass');
     this.ball.holder = null;
     this.ball.returnPass = true;
     this.ball = null;

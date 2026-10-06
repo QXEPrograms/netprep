@@ -20,8 +20,12 @@ ISO.PlayerContact = class {
   // a = attacker locomotion, d = defender locomotion (both: position, velocity).
   // ball (optional): the attacker's dribbled ball, which counts as part of the
   // attacker's footprint so it can't be dribbled through the defender.
-  resolve(a, d, dt, ball = null) {
+  // aAir / dAir: attacker / defender airborne. In the air corrections are
+  // capped smaller (no sideways pops), but they still apply every frame, so a
+  // jumper can't float through the other player's torso.
+  resolve(a, d, dt, ball = null, aAir = false, dAir = false) {
     const c = this.cfg;
+    this._maxFix = (aAir || dAir ? c.maxFixAir : c.maxFix) * Math.max(1, dt * 60);
     const body = this._pair(a, d, a.position.x, a.position.z, 2 * c.radius, dt);
     const withBall = ball ? this._pair(a, d, ball.x, ball.z, c.radius + c.ballRadius, dt) : false;
     this.touching = body || withBall;
@@ -48,7 +52,7 @@ ISO.PlayerContact = class {
     const aIn = a.velocity.x * nx + a.velocity.z * nz;          // attacker moving into the defender
     const dIn = -(d.velocity.x * nx + d.velocity.z * nz);       // defender moving into the attacker
     const share = dIn > aIn ? c.defenderPushShare : c.defenderShare;
-    const fix = overlap * Math.min(1, c.softness * (dt * 60));
+    const fix = Math.min(this._maxFix || Infinity, overlap * Math.min(1, c.softness * (dt * 60)));
     a.position.x -= nx * fix * (1 - share);
     a.position.z -= nz * fix * (1 - share);
     d.position.x += nx * fix * share;
@@ -63,6 +67,7 @@ ISO.PlayerContact = class {
       const lose = closing * c.momentumLoss;
       a.velocity.x -= nx * lose;
       a.velocity.z -= nz * lose;
+      if (a.onContact) a.onContact(nx, nz, lose);
       d.velocity.x += nx * lose * c.pushTransfer;
       d.velocity.z += nz * lose * c.pushTransfer;
     }

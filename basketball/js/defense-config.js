@@ -4,6 +4,8 @@
 ISO.DEFENSE = {
   // ?nodefense removes the defender (e.g. to practice offense alone).
   enabled: !/[?&]nodefense\b/.test(window.location.search),
+  // ?defenseplayer: you control the defender (a dev bot runs the offense).
+  playerControlsDefense: /[?&]defenseplayer\b/.test(window.location.search),
 
   // ---- defensive locomotion (used by CPU and, later, human defenders) -----
   locomotion: {
@@ -97,7 +99,9 @@ ISO.DEFENSE = {
     lostPosition: 1.1,     // this far from the guard spot (e.g. outrun sideways) = recovering
     runToRecover: 0.9,     // while recovering, turn and run if still farther than this
     closeoutGap: 2.4,      // shot starting with the defender farther than this = closeout
-    contestDist: 1.0,      // closeouts stop about here
+    contestDist: 1.3,      // closeouts stop about here
+    contestJumpChance: 0.6, // CPU: jumps on this share of contests (hands up otherwise)
+    contestJumpChanceClose: 0.8, // ...when already right on the shooter
     contestHold: 0.7,      // seconds the contest pose holds after the release
   },
 
@@ -110,17 +114,70 @@ ISO.DEFENSE = {
     softness: 0.7,         // fraction of the overlap corrected per frame (soft, not a wall)
     momentumLoss: 0.55,    // fraction of the closing speed the attacker loses on contact
     pushTransfer: 0.3,     // fraction of it pushed into the defender
+    maxFix: 0.06,          // largest position correction per frame on the floor (m)
+    maxFixAir: 0.03,       // ...and while either player is airborne
   },
 
-  // ---- contest foundation (computed and exposed; NOT applied to accuracy yet) ---
+  // ---- defensive jump (character simulation; same for CPU and humans) -----
+  jump: {
+    loadTime: 0.1,         // plant + crouch before leaving the floor
+    loadBrake: 0.55,       // horizontal speed kept through the load
+    height: 0.68,          // standing vertical (m): set and square = your best jump
+    movingLoss: 0.15,      // fraction of height lost at full speed (less push into the floor)
+    gravity: 9.81,
+    carry: 0.85,           // horizontal velocity carried into the air
+    carryRun: 1.0,         // ...when running (harder to control)
+    airControl: 2.5,       // m/s^2 of steering in the air
+    airControlRun: 1.0,
+    landTime: 0.2,         // absorbing the landing: slow and can't jump again
+    landSpeedScale: 0.3,
+    airTurnScale: 0.5,     // facing assist turns slower in the air
+  },
+
+  // ---- arms ------------------------------------------------------------------
+  arms: {
+    raiseTime: 0.15,       // seconds to get a hand fully up (no instant arms)
+    lowerTime: 0.25,
+    aimUp: 2.2,            // contest arm: mostly straight up, leaning toward the ball in the hands...
+    aimUpFree: 1.4,        // ...and still mostly up once it's in the air (no chasing the ball)
+    handSpeed: 7,          // m/s the contest hand can swing to a new direction
+    anticipate: 0.35,      // aim this far above a ball that is still in the shooter's hands
+  },
+
+  // ---- hand colliders & physical blocks ---------------------------------------
+  hands: {
+    radius: 0.085,         // collision sphere ~ the visible hand + spread fingers
+    fingerOffset: 0.03,    // sphere center sits a little past the palm, along the forearm
+    restitution: 0.45,     // hand-ball bounciness
+    friction: 0.4,
+    maxShotAge: 1.6,       // only shots in their first 1.6 s of flight can be blocked
+    tipAngle: 0.21,        // < 12 degrees of direction change = fingertip
+    popUpNormal: 0.55,     // contact from underneath (normal this much upward) = pop-up
+    resetAfter: 1.8,       // dev: seconds after a block before the ball is handed back
+  },
+
+  // ---- contest (deterministic from player state) --------------------------------
   contest: {
-    nearDist: 0.7,         // full distance factor at or inside this
+    nearDist: 0.7,         // full distance factor at or inside this (defender body -> ball)
     farDist: 2.6,          // zero beyond this
-    base: 0.25,            // a body in front with hands down
-    hand: 0.5,             // + a hand up in time
-    jumpBonus: 0.25,       // + a well-timed jump
-    jumpHeight: 0.32,      // contest jump
-    jumpTime: 0.42,
-    handRaiseTime: 0.18,   // seconds to get the hand fully up
+    body: 0.22,            // a body in front, hands down: pressure only
+    hand: 0.5,             // + a hand in the ball's path (by actual hand-to-path distance)
+    jumpBonus: 0.28,       // + that hand up there on a jump
+    handNear: 0.22,        // hand within this of the ball's path = full hand factor
+    handFar: 1.1,          // ...nothing beyond this
+    pathLength: 1.3,       // the early ball path the hand is measured against (m)
+    pathRise: 1.0,
+    handRaiseTime: 0.15,   // (kept for the CPU's hand smoothing)
+  },
+
+  // ---- contest -> shot difficulty ------------------------------------------------
+  // The ball still flies to a physical target; contest only widens the aim spread.
+  contestEffect: {
+    offGreen: 0.9,         // off-green spread x (1 + this x contest)
+    greenFrom: 0.25,       // greens are untouched below this contest...
+    greenSpread: 0.16,     // ...then spread (m, 1 sd) = (contest - greenFrom) x this
+    layup: 0.8,            // finish spread x (1 + this x contest)
+    floater: 0.8,
+    dunk: 0.5,
   },
 };

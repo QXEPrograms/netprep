@@ -25,7 +25,10 @@ ISO.OFFENSE = {
     behindBack: ['shot', 'crossover', 'spin', 'stepBack', 'hesitation'],
     spin:       ['shot', 'crossover', 'hesitation'],
   },
-  inputBuffer: 0.15,   // a move pressed just before its window opens still fires (seconds)
+  inputBuffer: 0.15,
+  // Finishes: how long before the release a defender's hand can reach the ball
+  // (the "release portion" of a layup, dunk or floater).
+  finishReleaseWindow: 0.12,   // a move pressed just before its window opens still fires (seconds)
 
   // ---- light fatigue ------------------------------------------------------
   fatigue: {

@@ -1,8 +1,9 @@
 // UI: DOM overlay for the score, the shot meter and shot feedback. It only
 // reads game state (ShootingSystem, ScoringSystem); it never changes it.
 ISO.UI = class {
-  constructor(container) {
+  constructor(container, opts = {}) {
     this.container = container;
+    this.role = opts.role || 'offense';
 
     // Shot meter: a vertical bar beside the shooter with marked timing zones.
     this.meter = el('div', 'shot-meter');
@@ -35,7 +36,20 @@ ISO.UI = class {
     // Controls guide along the bottom edge, grouped by what the keys do.
     // [keys, label, alternate keys, short label for narrow screens]
     this.controls = el('div', 'controls-bar');
-    const GROUPS = [
+    // Controls depend on your role: on defense the same keys mean different things.
+    const GROUPS = opts.role === 'defense' ? [
+      ['Defend', [
+        [['W', 'A', 'S', 'D'], 'Pressure / slide / give ground', ['↑', '←', '↓', '→'], 'Move'],
+        [['Shift'], 'Turn & run', null, 'Run'],
+        [['Space'], 'Jump / contest', null, 'Jump'],
+        [['F'], 'Hold: hands up', null, 'Hands'],
+      ]],
+      ['Test offense', [
+        [['1'], 'Jumper', null, 'Jumper'], [['2'], 'Pull-up', null, 'Pull-up'], [['3'], 'Step-back', null, 'Step'],
+        [['4'], 'Side-step', null, 'Side'], [['5'], 'Drive', null, 'Drive'], [['6'], 'Floater', null, 'Float'],
+        [['7'], 'Pump fake', null, 'Fake'], [['0'], 'Stand', null, 'Stand'],
+      ]],
+    ] : [
       ['Move', [
         [['W', 'A', 'S', 'D'], 'Move', ['↑', '←', '↓', '→'], 'Move'],
         [['Shift'], 'Sprint', null, 'Sprint'],
@@ -140,6 +154,7 @@ ISO.UI = class {
     }
     const r = scoring.resolvedThisFrame;
     if (!r) return;
+    if (r.blocked && !r.made) return;              // already shown as a block
     let main, sub, kind;
     const pts = `+${r.points}${r.isThree ? '  ·  3PT' : ''}`;
     const FINISH = { dunk: 'DUNK!', layup: 'LAYUP', floater: 'FLOATER' };
@@ -155,6 +170,12 @@ ISO.UI = class {
       main = 'MISSED'; sub = r.timing ? `${r.timing} RELEASE` : ''; kind = 'missed';
     }
     this._showFeedback(main, sub, kind);
+  }
+
+  // A physical block happened (from the blockOccurred event).
+  showBlock(e) {
+    const sub = { rejection: 'REJECTED', deflection: 'DEFLECTED', 'pop-up': 'POPPED UP', fingertip: 'FINGERTIP' }[e.blockType] || '';
+    this._showFeedback('BLOCKED!', sub, 'bad');
   }
 
   _showToast(text) {

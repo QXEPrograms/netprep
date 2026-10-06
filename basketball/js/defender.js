@@ -10,17 +10,26 @@
 // The brain is swappable: setControl('human') makes the same locomotion,
 // facing assist and animations run from WASD-style input (see humanInput).
 //
-// Contest values are computed every frame (ContestTracker) and exposed here;
-// they do NOT change shot accuracy yet.
+// Physical defense: the jump lives in DefensiveLocomotion, the hands carry
+// collision spheres (BlockSystem, blocking.js) and the contest is computed
+// deterministically from player state (ContestTracker). The shooting systems
+// read the contest at the release to widen their aim spread.
 (function () {
 const H = ISO.CONFIG.hoop;
 
 // ---------------------------------------------------------------------------
-// ContestTracker: how well the defender is contesting the current shot.
-//   isContesting, contestDistance (m), contestAngle (rad, 0 = straight in front
-//   between shooter and rim), contestTiming (0..1 hand up at the release),
-//   contestHandHeight (m), contestStrength (0 open .. 1 smothered),
-//   atRelease: a copy of the values at the moment the ball left the hand.
+// ContestTracker: how much the defender is bothering the current shot,
+// computed deterministically from visible player state (no randomness):
+//   - the ball's actual position (its early path toward the rim is the
+//     "release lane"; before release, the ball in the shooter's hands)
+//   - defender body distance to the ball and where it is (front/beside/behind)
+//   - whether the chest faces the shooter
+//   - how close a real hand is to that release lane (so release side, height
+//     and reach all matter: a hand on the wrong side or behind is far from it)
+//   - whether that hand is up on a jump
+// Values: isContesting, contestDistance, contestAngle, contestTiming (arm
+// raise 0..1), contestHandHeight, contestHandDistance, contestStrength (0..1),
+// atRelease (a copy at the moment the ball left the hand).
 // ---------------------------------------------------------------------------
 ISO.ContestTracker = class {
   constructor(defender) {
@@ -31,50 +40,69 @@ ISO.ContestTracker = class {
     this.contestAngle = 0;
     this.contestTiming = 0;
     this.contestHandHeight = 0;
+    this.contestHandDistance = Infinity;
     this.contestStrength = 0;
     this.atRelease = null;
     this.releaseCount = 0;
-    this._h = new THREE.Vector3();
+    this._p0 = new THREE.Vector3();
+    this._p1 = new THREE.Vector3();
+  }
+
+  // Contest strength right now (0..1), plus the parts, from player state only.
+  evaluate() {
+    const d = this.defender, P = d.opponent, c = this.cfg, L = d.locomotion;
+    const ball = P.ball.position;
+    // release lane: from the ball (a little above it while still in the hands)
+    // toward the rim, rising
+    const p0 = this._p0.copy(ball);
+    if (P.ball.mode !== ISO.Basketball.MODES.FREE) p0.y += ISO.DEFENSE.arms.anticipate * 0.5;
+    let ux = 0 - p0.x, uz = H.centerZ - p0.z;
+    const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+    const p1 = this._p1.set(p0.x + ux * c.pathLength, p0.y + c.pathRise, p0.z + uz * c.pathLength);
+    const dx = L.position.x - p0.x, dz = L.position.z - p0.z;
+    const dist = Math.hypot(dx, dz);
+    const angle = Math.acos(Math.max(-1, Math.min(1, (dx * ux + dz * uz) / Math.max(1e-4, dist))));
+    const distF = smoothstep(c.farDist, c.nearDist, dist);
+    const posF = 0.08 + 0.92 * Math.pow((1 + Math.cos(angle)) / 2, 0.8);    // front 1, beside ~.55, behind ~.1
+    const faceF = 0.5 + 0.5 * Math.max(0, Math.cos(L.defensiveFacingError));
+    // nearest real hand to the release lane
+    let handDist = Infinity, handY = 0;
+    for (const h of d.blocks.hands) {
+      const hd = segDist(h.cur, p0, p1) - h.radius;
+      if (hd < handDist) { handDist = hd; handY = h.cur.y; }
+    }
+    const handF = smoothstep(c.handFar, c.handNear, handDist);
+    const jumpF = Math.min(1, L.jumpHeight / 0.4);
+    const strength = Math.max(0, Math.min(1,
+      c.body * distF * posF * faceF + c.hand * handF * faceF + c.jumpBonus * handF * jumpF));
+    return { strength, dist, angle, handDist, handY, handF, jumpF };
   }
 
   update() {
-    const d = this.defender, P = d.opponent, sh = P.shooting, fi = P.finishing;
+    const d = this.defender, P = this.defender.opponent, sh = P.shooting, fi = P.finishing;
     const shotLive = (sh.isShooting && sh.shotCommitted) || fi.busy;
-    const released = (sh.shotReleased) || (fi.shotReleased);
-    const D = d.locomotion.position, S = P.locomotion.position;
-    const c = this.cfg;
-    const dx = D.x - S.x, dz = D.z - S.z;
-    const dist = Math.hypot(dx, dz);
-    const rx = 0 - S.x, rz = H.centerZ - S.z, rl = Math.hypot(rx, rz) || 1;
-    const angle = Math.acos(Math.max(-1, Math.min(1, (dx * rx + dz * rz) / (Math.max(1e-4, dist) * rl))));
-    const facingErr = Math.abs(d.locomotion.defensiveFacingError);
-    const hand = d.getContestHandWorld(this._h);
+    const released = sh.shotReleased || fi.shotReleased;
+    const e = this.evaluate();
+    this.contestDistance = e.dist;
+    this.contestAngle = e.angle;
+    this.contestTiming = d.handRaise;
+    this.contestHandHeight = e.handY;
+    this.contestHandDistance = e.handDist;
+    this.contestStrength = shotLive || released ? e.strength : 0;
+    this.isContesting = shotLive && e.strength > 0.1 && (e.handF > 0.2 || e.jumpF > 0.2);
+  }
 
-    // Factors (all 0..1)
-    const distF = smoothstep(c.farDist, c.nearDist, dist);
-    const posF = 0.08 + 0.92 * Math.pow((1 + Math.cos(angle)) / 2, 0.8);     // front 1, beside ~.55, behind ~.1
-    const faceF = 0.55 + 0.45 * Math.max(0, Math.cos(facingErr));
-    const ballY = P.ball.position.y;
-    const handF = Math.max(0, Math.min(1, (hand.y - 1.6) / Math.max(0.3, ballY + 0.15 - 1.6)));
-    const timing = d.handRaise;
-    const jumpF = d.jumpY > 0.08 ? Math.min(1, d.jumpY / c.jumpHeight) : 0;
-    let strength = distF * posF * faceF * (c.base + c.hand * handF * (0.4 + 0.6 * timing)) + c.jumpBonus * jumpF * distF * posF;
-    strength = Math.max(0, Math.min(1, strength));
-
-    this.isContesting = shotLive && d.handRaise > 0.3 && distF > 0;
-    this.contestDistance = dist;
-    this.contestAngle = angle;
-    this.contestTiming = timing;
-    this.contestHandHeight = hand.y;
-    this.contestStrength = shotLive || released ? strength : 0;
-    if (released) {
-      this.releaseCount++;
-      this.atRelease = {
-        shotType: sh.shotReleased ? sh.shotType : fi.shotType,
-        distance: +dist.toFixed(2), angle: +angle.toFixed(2), timing: +timing.toFixed(2),
-        handHeight: +hand.y.toFixed(2), jumped: d.jumpY > 0.08, strength: +strength.toFixed(2),
-      };
-    }
+  // Called by the shooting/finishing systems at the release (the value they
+  // use for accuracy) — also stored for the debug panel/tests.
+  atReleaseValue(shotType) {
+    const e = this.evaluate();
+    this.releaseCount++;
+    this.atRelease = {
+      shotType, strength: +e.strength.toFixed(3), distance: +e.dist.toFixed(2), angle: +e.angle.toFixed(2),
+      handDistance: +e.handDist.toFixed(2), handHeight: +e.handY.toFixed(2), timing: +this.defender.handRaise.toFixed(2),
+      jumped: this.defender.locomotion.jumpHeight > 0.05, jumpHeight: +this.defender.locomotion.jumpHeight.toFixed(2),
+    };
+    return e.strength;
   }
 };
 
@@ -92,17 +120,18 @@ ISO.DefenderController = class {
     this.inputMapper = new ISO.DefenseInputMapper();
     this.contest = new ISO.ContestTracker(this);
     this.contact = new ISO.PlayerContact();
+    this.blocks = new ISO.BlockSystem({ ball, world: ball.world, events: null, defender: this });
 
-    this.control = 'cpu';               // 'cpu' | 'human'
-    this.humanInput = { x: 0, y: 0, sprint: false };
+    // Who supplies the intent: 'cpu' (DefenderAI) or 'human' (humanInput,
+    // filled each frame by a keyboard source now, a network source later).
+    this.control = 'cpu';
+    // Plain, serializable input intent for a human/remote defender.
+    this.humanInput = { x: 0, y: 0, sprint: false, jump: false, handsUp: false };
+    this.lastIntent = null;
 
-    // Body extras
-    this.jumpY = 0;
-    this.isJumping = false;
-    this._jumpT = 0;
-    this.handRaise = 0;                 // 0..1 contest hand up
+    // Arms
+    this.handRaise = 0;                 // 0..1 how far the contest arm is up (time-limited)
     this.handsUp = 0;
-    this.jumpCount = 0;
 
     this.hands = [
       { side: 1, target: new THREE.Vector3(), weight: 1 },
@@ -112,6 +141,10 @@ ISO.DefenderController = class {
     this._fwd = new THREE.Vector3();
     this._right = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
+    this._aim = new THREE.Vector3();
+    this._sh = new THREE.Vector3();
+    this._dir = new THREE.Vector3();
+    this._reach = new THREE.Vector3();
     this._basket = new THREE.Vector3(0, 0, H.centerZ);
     this.update(0);
     this.updateVisual(0);
@@ -131,7 +164,7 @@ ISO.DefenderController = class {
     L.velocity.set(0, 0, 0);
     L.facing = Math.atan2(O.x - position.x, O.z - position.z);
     L.turnSpeed = 0; L.mode = 'stance'; L.isPlanting = false; L.speedScale = 1;
-    this.isJumping = false; this.jumpY = 0; this.handRaise = 0;
+    L.jumpState = 'ground'; L.jumpHeight = 0; L.verticalVelocity = 0; this.handRaise = 0;
     const ai = this.ai;
     ai._buf.length = 0; ai.perceived = ai.prevPerceived = null; ai._perceivedT = ai.time;
     ai._recentFakes.length = 0; ai._recentCrossovers.length = 0; ai._lastCrossoverSeen = -99;
@@ -139,27 +172,36 @@ ISO.DefenderController = class {
     this.inputMapper.holdDist = null;
   }
 
-  // Brain + movement. Call before the ball handler moves this frame.
+  get jumpY() { return this.locomotion.jumpHeight; }
+  get isJumping() { return this.locomotion.jumpState === 'load' || this.locomotion.jumpState === 'air'; }
+  get jumpCount() { return this.locomotion.jumpCount; }
+
+  // Brain -> intent -> character simulation. Call before the ball handler
+  // moves this frame. Both brains produce the same kind of intent; the CPU
+  // can only *ask* to jump or raise its hands, exactly like a human.
   update(dt) {
     const L = this.locomotion;
     this.ai.observe(dt);
-    let intent;
+    let intent, handsUp;
     if (this.control === 'human') {
-      const opp = this.opponent.locomotion.position;
-      intent = this.inputMapper.map(this.humanInput, this.camera, L, opp, this._basket, this.humanInput.sprint);
-      this.handsUp = 0.35;
+      const hi = this.humanInput, opp = this.opponent.locomotion.position;
+      intent = this.inputMapper.map(hi, this.camera, L, opp, this._basket, hi.sprint);
+      intent.jump = !!hi.jump;
+      hi.jump = false;                                   // an edge: one jump per press
+      handsUp = !!hi.handsUp;
     } else {
       intent = this.ai.update(dt);
-      this.handsUp = this.ai.handsUp;
-      if (this.ai.wantJump && !this.isJumping) this._startJump();
+      intent.jump = this.ai.wantJump;
+      handsUp = this.ai.handsUp >= 0.85;
     }
-    // Airborne: no new movement (keep a little drift).
-    if (this.isJumping) { intent.velocity.copy(L.velocity).multiplyScalar(0.9); intent.allowRun = false; }
+    this.lastIntent = { moveX: +intent.velocity.x.toFixed(3), moveZ: +intent.velocity.z.toFixed(3), sprint: !!intent.allowRun, jump: !!intent.jump, handsUp };
     L.update(dt, intent);
-    this._updateJump(dt);
-    const k = dt > 0 ? Math.min(1, dt / ISO.DEFENSE.contest.handRaiseTime) : 1;
-    const wantRaise = this.handsUp >= 0.85 ? 1 : 0;
-    this.handRaise += (wantRaise - this.handRaise) * Math.min(1, k * 2.2);
+    // Arms go up on a jump (that's the contest) or when asked; they take time.
+    const A = ISO.DEFENSE.arms;
+    const want = handsUp || L.jumpState === 'load' || L.jumpState === 'air';
+    this.handsUp = want ? 1 : 0;
+    const rate = dt / (want ? A.raiseTime : A.lowerTime);
+    this.handRaise = Math.max(0, Math.min(1, this.handRaise + (want ? rate : -rate)));
   }
 
   // Soft body contact with the ball handler (call right after the ball
@@ -168,33 +210,26 @@ ISO.DefenderController = class {
     this.contact.overlap = 0;
     const b = this.ball;
     const dribbled = this.opponent.hasBall && b.mode !== ISO.Basketball.MODES.FREE && b.position.y < 1.4 ? b.position : null;
-    return this.contact.resolve(this.opponent.locomotion, this.locomotion, dt, dribbled);
+    return this.contact.resolve(this.opponent.locomotion, this.locomotion, dt, dribbled, this.opponent.airborne, this.locomotion.airborne);
   }
 
-  // Contest values + pose. Call after the ball handler's update this frame.
+  // Pose, hand colliders, contest. Call after the ball handler's update and
+  // before the ball's physics step this frame (so the hands are where they
+  // are drawn when the ball moves).
   updateVisual(dt) {
-    this.contest.update();
+    this.model.update(dt, this._modelState(), this._pose(dt));
+    // Hand colliders are live only during a real defensive action: a jump or
+    // raised hands. Lowered "active hands" never block.
     const L = this.locomotion;
-    this.model.update(dt, this._modelState(), this._pose());
-  }
-
-  _startJump() {
-    this.isJumping = true;
-    this._jumpT = 0;
-    this.jumpCount++;
-  }
-
-  _updateJump(dt) {
-    if (!this.isJumping) { this.jumpY = 0; return; }
-    const c = ISO.DEFENSE.contest;
-    this._jumpT += dt;
-    const u = this._jumpT / c.jumpTime;
-    this.jumpY = u < 1 ? c.jumpHeight * 4 * u * (1 - u) : 0;
-    if (u >= 1) this.isJumping = false;
+    const live = (L.jumpState === 'air' || L.jumpState === 'load' || this.handRaise > 0.5) && L.mode !== 'run';
+    this.blocks.sync(dt, [live, live]);
+    this.blocks.checkHeld(this.opponent);
+    this.contest.update();
   }
 
   // World position of the contest hand (the one on the ball side).
   getContestHandWorld(out) {
+    if (this.blocks) return out.copy(this.blocks.hands[this._ballSide() > 0 ? 0 : 1].cur);
     const side = this._ballSide();
     return this.model.getHandWorld(side, out);
   }
@@ -218,7 +253,7 @@ ISO.DefenderController = class {
     };
   }
 
-  _pose() {
+  _pose(dt = 0) {
     const L = this.locomotion, b = this.body;
     const f = L.facing;
     const fwd = this._fwd.set(Math.sin(f), 0, Math.cos(f));
@@ -228,22 +263,49 @@ ISO.DefenderController = class {
     const at = (lat, fw, y, out) => out.copy(P).addScaledVector(right, lat).addScaledVector(fwd, fw).setY(y + jy);
     const bs = this._ballSide();
     const raise = this.handRaise;
-    const [hr, hl] = this.hands;
-    // Active hands: wide and low, ball-side hand a little higher; contest:
-    // ball-side hand straight up toward the shooter, the other up as a wall.
+    const A = ISO.DEFENSE.arms;
+    // Contest arm: reach from the shoulder toward the ball (above it while it's
+    // still in the shooter's hands), leaning up. The target is deliberately
+    // past arm's length: the arm IK stops at the real shoulder/elbow reach, so
+    // the hand can never stretch to the ball — it only points at it.
+    const ball = this.ball.position;
+    const aim = this._aim.copy(ball);
+    if (this.ball.mode !== ISO.Basketball.MODES.FREE) aim.y += A.anticipate;
     for (const h of this.hands) {
-      const ball = h.side === bs;
-      const lat = h.side * lerp(0.48, ball ? 0.16 : 0.42, raise);
-      const fw = lerp(0.28, ball ? 0.32 : 0.3, raise);
-      const y = lerp(ball ? 1.22 + 0.15 * Math.min(1, this.handsUp * 2) : 1.02, ball ? 2.45 : 1.75, raise);
-      at(lat, fw, y, h.target);
+      const ballSide = h.side === bs;
+      // low "active hands"
+      at(h.side * 0.48, 0.28, ballSide ? 1.3 : 1.02, h.target);
+      if (raise > 0) {
+        const arm = this.model.arms.find((a) => a.side === -h.side);
+        const sh = arm.shoulder.getWorldPosition(this._sh);
+        let reach;
+        if (ballSide) {
+          const dir = this._dir.copy(aim).sub(sh).normalize();
+          dir.y += this.ball.mode === ISO.Basketball.MODES.FREE ? A.aimUpFree : A.aimUp; dir.normalize();
+          // the arm swings toward that direction at a hand's speed, not instantly
+          const want = this._reach.copy(sh).addScaledVector(dir, 0.95);
+          if (!this._contestReach || raise < 0.05 || dt === 0) this._contestReach = want.clone();
+          else {
+            const step = this._tmp.copy(want).sub(this._contestReach), len = step.length(), max = A.handSpeed * dt;
+            this._contestReach.addScaledVector(step, len > max ? max / len : 1);
+          }
+          reach = this._contestReach;
+        } else {
+          reach = at(h.side * 0.36, 0.3, 0, this._reach);       // other arm: partly up, a wall
+          reach.y = sh.y + 0.3;
+        }
+        h.target.lerp(reach, raise);
+      }
       h.weight = run ? 0 : 1;
     }
     // Keep the hands out of the ball handler's chest when they're right on top of us.
     const om = this.opponent.model;
     om.root.updateMatrixWorld(true);
     for (const h of this.hands) pushOutOfBox(h.target, om.torso, 0.26, 0.22 + 0.07, 0.25, 0.12 + 0.07, this._tmp);
-    b.crouch = run ? 0.2 : 1.25 - 0.9 * raise;
+    // Crouch: deep stance; sink on the jump load, stretch tall in the air,
+    // absorb the landing.
+    const js = L.jumpState;
+    b.crouch = run ? 0.2 : js === 'load' ? 1.9 : js === 'air' ? 0 : js === 'land' ? 1.7 : 1.25 - 0.6 * raise;
     b.twist = 0; b.roll = 0; b.sway = 0; b.jab = 0; b.forward = 0; b.stride = 1;
     b.turnRoll = 0.4;
     return {
@@ -268,5 +330,11 @@ function pushOutOfBox(p, obj, cy, hx, hy, hz, tmp) {
   p.copy(obj.localToWorld(q));
 }
 function lerp(a, b, t) { return a + (b - a) * t; }
+function segDist(p, a, b) {
+  const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
+  const l2 = abx * abx + aby * aby + abz * abz;
+  const t = l2 > 0 ? Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.y - a.y) * aby + (p.z - a.z) * abz) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t), p.z - (a.z + abz * t));
+}
 function smoothstep(a, b, v) { const t = Math.max(0, Math.min(1, (v - a) / (b - a))); return t * t * (3 - 2 * t); }
 })();
