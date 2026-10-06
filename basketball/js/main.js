@@ -26,6 +26,17 @@ ISO.Game = class {
     this.cameraController = new ISO.CameraController(container.clientWidth / container.clientHeight);
     this.cameraController.setAspect(container.clientWidth / container.clientHeight);
 
+    this.input = new ISO.Input();
+    this.player = new ISO.PlayerController({
+      input: this.input,
+      camera: this.cameraController.camera,
+      startPosition: new THREE.Vector3(0, 0, 8.5), // top of the key
+      startFacing: Math.PI,                         // facing the basket
+    });
+    this.scene.add(this.player.object);
+    this.cameraController.setFocus(this.player.position);
+    this.cameraController.snap();
+
     this.clock = new THREE.Clock();
     window.addEventListener('resize', () => this.onResize());
     this.renderer.setAnimationLoop(() => this.tick());
@@ -39,7 +50,9 @@ ISO.Game = class {
 
   tick() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
+    this.player.update(dt);
     this.hoop.net.update(dt);
+    this.cameraController.setFocus(this.player.position);
     this.cameraController.update(dt);
     this.renderer.render(this.scene, this.cameraController.camera);
   }
