@@ -190,6 +190,12 @@ html, body {
   color: rgba(255, 255, 255, 0.82);
   letter-spacing: 0.02em;
 }
+.controls-group { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 14px; }
+.controls-group + .controls-group { margin-left: 8px; }
+.controls-group__title {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
+  color: rgba(255, 179, 102, 0.85); margin-right: -4px;
+}
 .controls-bar__item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .controls-bar__keys { display: inline-flex; align-items: center; gap: 2px; }
 .controls-bar__or { margin: 0 3px; color: rgba(255, 255, 255, 0.35); }
@@ -212,6 +218,8 @@ html, body {
 /* Small laptops: tighter spacing */
 @media (max-width: 1100px) {
   .controls-bar { gap: 5px 12px; padding: 6px 10px; }
+  .controls-group { gap: 5px 11px; }
+  .controls-group + .controls-group { margin-left: 4px; }
   .controls-bar__label { font-size: 10px; }
 }
 .controls-bar__label--short { display: none; }
@@ -219,6 +227,9 @@ html, body {
    into compact rows */
 @media (max-width: 720px) {
   .controls-bar { gap: 4px 10px; bottom: 6px; padding: 5px 8px; }
+  .controls-group { gap: 4px 9px; }
+  .controls-group + .controls-group { margin-left: 0; }
+  .controls-group__title { display: none; }
   .controls-bar__or, .keycap--alt { display: none; }
   .keycap { min-width: 15px; padding: 1px 3px; font-size: 9px; line-height: 12px; }
   .keycap--wide { padding: 1px 5px; }
@@ -228,6 +239,9 @@ html, body {
 /* Very short screens (phones in landscape): one tight line with short labels */
 @media (max-height: 430px) {
   .controls-bar { bottom: 4px; padding: 3px 8px; gap: 3px 9px; }
+  .controls-group { gap: 3px 8px; }
+  .controls-group + .controls-group { margin-left: 0; }
+  .controls-group__title { display: none; }
   .controls-bar__or, .keycap--alt { display: none; }
   .keycap { min-width: 15px; padding: 1px 3px; font-size: 9px; line-height: 12px; }
   .controls-bar__label { display: none; }
@@ -251,4 +265,4 @@ html, body {
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .hud-toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
-@media (max-width: 720px) { .hud-toast { bottom: 96px; } }
+/* (the toast's bottom is set from the controls bar's height in ui.js) */

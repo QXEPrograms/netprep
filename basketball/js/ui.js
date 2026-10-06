@@ -32,32 +32,48 @@ ISO.UI = class {
     this.scoreValue.textContent = '0';
     this.scoreboard.append(label, this.scoreValue);
 
-    // Controls guide along the bottom edge.
-    this.controls = el('div', 'controls-bar');
+    // Controls guide along the bottom edge, grouped by what the keys do.
     // [keys, label, alternate keys, short label for narrow screens]
-    const CONTROLS = [
-      [['W', 'A', 'S', 'D'], 'Move', ['↑', '←', '↓', '→'], 'Move'],
-      [['Shift'], 'Sprint', null, 'Sprint'],
-      [['E'], 'Crossover', null, 'Cross'],
-      [['Q'], 'Step back', null, 'Step back'],
-      [['Space'], 'Tap: pump fake', null, 'Tap: fake'],
-      [['Space'], 'Hold / release: shoot', null, 'Hold: shoot'],
-      [['F'], 'Pass', null, 'Pass'],
+    this.controls = el('div', 'controls-bar');
+    const GROUPS = [
+      ['Move', [
+        [['W', 'A', 'S', 'D'], 'Move', ['↑', '←', '↓', '→'], 'Move'],
+        [['Shift'], 'Sprint', null, 'Sprint'],
+      ]],
+      ['Handle', [
+        [['E'], 'Crossover', null, 'Cross'],
+        [['Z', 'X'], 'Spin L / R', null, 'Spin'],
+        [['C'], 'Hesitation', null, 'Hesi'],
+        [['V'], 'Behind back', null, 'BTB'],
+        [['R'], 'In & out', null, 'In-out'],
+        [['Q'], 'Step back', null, 'Step'],
+      ]],
+      ['Score', [
+        [['Space'], 'Tap fake · Hold shoot · Drive to finish', null, 'Fake/Shoot/Finish'],
+        [['F'], 'Pass', null, 'Pass'],
+      ]],
     ];
-    for (const [keys, label, alt, short] of CONTROLS) {
-      const item = el('div', 'controls-bar__item');
-      const caps = el('span', 'controls-bar__keys');
-      keys.forEach((k) => { const c = el('kbd', 'keycap' + (k.length > 1 ? ' keycap--wide' : '')); c.textContent = k; caps.append(c); });
-      if (alt) {
-        const or = el('span', 'controls-bar__or'); or.textContent = '/'; caps.append(or);
-        alt.forEach((k) => { const c = el('kbd', 'keycap keycap--alt'); c.textContent = k; caps.append(c); });
+    for (const [title, items] of GROUPS) {
+      const group = el('div', 'controls-group');
+      const head = el('span', 'controls-group__title');
+      head.textContent = title;
+      group.append(head);
+      for (const [keys, label, alt, short] of items) {
+        const item = el('div', 'controls-bar__item');
+        const caps = el('span', 'controls-bar__keys');
+        keys.forEach((k) => { const c = el('kbd', 'keycap' + (k.length > 1 ? ' keycap--wide' : '')); c.textContent = k; caps.append(c); });
+        if (alt) {
+          const or = el('span', 'controls-bar__or'); or.textContent = '/'; caps.append(or);
+          alt.forEach((k) => { const c = el('kbd', 'keycap keycap--alt'); c.textContent = k; caps.append(c); });
+        }
+        const text = el('span', 'controls-bar__label');
+        text.textContent = label;
+        const shortText = el('span', 'controls-bar__label controls-bar__label--short');
+        shortText.textContent = short;
+        item.append(caps, text, shortText);
+        group.append(item);
       }
-      const text = el('span', 'controls-bar__label');
-      text.textContent = label;
-      const shortText = el('span', 'controls-bar__label controls-bar__label--short');
-      shortText.textContent = short;
-      item.append(caps, text, shortText);
-      this.controls.append(item);
+      this.controls.append(group);
     }
 
     // Small transient notice (e.g. no pass target).
@@ -82,6 +98,9 @@ ISO.UI = class {
     if (scoring) this._updateScore(scoring);
     if (passing && passing.passBlocked) this._showToast('No teammate to pass to yet');
     if (this._time > this._toastUntil) this.toast.classList.remove('is-shown');
+    // Keep the toast just above the controls bar, however many rows it wraps to.
+    const barH = this.controls.offsetHeight;
+    if (barH !== this._barH) { this._barH = barH; this.toast.style.bottom = `${barH + 22}px`; }
     if (!shooting) return;
     if (!this._zonesSet) this._setZones(shooting.timingZones);
 
@@ -123,10 +142,15 @@ ISO.UI = class {
     if (!r) return;
     let main, sub, kind;
     const pts = `+${r.points}${r.isThree ? '  ·  3PT' : ''}`;
-    if (r.made && r.timing === 'PERFECT') {
+    const FINISH = { dunk: 'DUNK!', layup: 'LAYUP', floater: 'FLOATER' };
+    if (FINISH[r.shotType]) {
+      // Finishes have no meter: name the finish.
+      if (r.made) { main = FINISH[r.shotType]; sub = pts; kind = r.shotType === 'dunk' ? 'perfect' : 'made'; }
+      else { main = 'MISSED'; sub = r.shotType.toUpperCase(); kind = 'missed'; }
+    } else if (r.made && r.timing === 'PERFECT') {
       main = 'GREEN!'; sub = `${r.swish ? 'SWISH' : 'MADE'}  ·  ${pts}`; kind = 'perfect';
     } else if (r.made) {
-      main = r.swish ? 'SWISH' : 'MADE'; sub = pts; kind = 'made';
+      main = r.swish ? 'SWISH' : 'MADE'; sub = r.shotType === 'sidestep' ? `SIDE-STEP  ·  ${pts}` : pts; kind = 'made';
     } else {
       main = 'MISSED'; sub = r.timing ? `${r.timing} RELEASE` : ''; kind = 'missed';
     }

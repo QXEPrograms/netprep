@@ -25,7 +25,7 @@ ISO.Locomotion = class {
     // Multiplier on acceleration/braking (e.g. a sharp burst right after a crossover).
     this.accelScale = 1;
     // Optional temporary control by a move (e.g. a step-back):
-    //   { velocity: Vector3, weight: 0..1, facing: yaw }
+    //   { velocity: Vector3, weight: 0..1, facing: yaw, exactFacing?: bool }
     // weight blends the normal velocity toward drive.velocity (1 = fully driven);
     // facing replaces the usual turn-toward-travel. null = normal control.
     this.drive = null;
@@ -56,7 +56,20 @@ ISO.Locomotion = class {
     if (dvLen > 0) {
       // Braking (desired opposes current motion) uses the stronger decel rate.
       const opposing = this.velocity.x * this._desired.x + this.velocity.z * this._desired.z < 0;
-      const rate = ((hasInput && !opposing) ? s.accel : s.decel) * this.accelScale;
+      let rate = ((hasInput && !opposing) ? s.accel : s.decel) * this.accelScale;
+      const speed = this.speed;
+      const m = ISO.OFFENSE && ISO.OFFENSE.momentum;
+      if (m && hasInput && speed > 0.5) {
+        // Momentum: reversing hard at speed needs a plant (softer braking the
+        // faster you're going); sprinting turns arc a little wider.
+        const cos = (this.velocity.x * dir.x + this.velocity.z * dir.z) / (speed * Math.hypot(dir.x, dir.z));
+        if (opposing && speed > m.plantFromSpeed) {
+          const f = Math.min(1, (speed - m.plantFromSpeed) / (s.sprintSpeed - m.plantFromSpeed));
+          rate *= 1 - (1 - m.plantBrake) * f;
+        } else if (this.sprinting && cos < 0.75) {
+          rate *= m.sprintTurnAccel;
+        }
+      }
       const step = Math.min(dvLen, rate * dt);
       this.velocity.x += (dvx / dvLen) * step;
       this.velocity.z += (dvz / dvLen) * step;
@@ -73,6 +86,13 @@ ISO.Locomotion = class {
     this.position.x += this.velocity.x * dt;
     this.position.z += this.velocity.z * dt;
     this._applyBounds();
+    if (drive && drive.exactFacing) {
+      // A move (e.g. a spin) sets the facing directly, including full turns.
+      const d = Math.atan2(Math.sin(drive.facing - this.facing), Math.cos(drive.facing - this.facing));
+      this.turnSpeed = dt > 0 ? d / dt : 0;
+      this.facing = Math.atan2(Math.sin(drive.facing), Math.cos(drive.facing));
+      return;
+    }
     if (drive) this._facingDir.set(Math.sin(drive.facing), 0, Math.cos(drive.facing));
     this._updateFacing(dt, drive ? this._facingDir : hasInput ? this._desired : this.velocity);
   }

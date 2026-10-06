@@ -56,12 +56,12 @@ ISO.ShootingSystem = class {
       target: new THREE.Vector3(0, H.rimHeight, H.centerZ),
       backspin: 16,           // rad/s (~2.5 revolutions per second)
       // Ball positions in the body frame: [lateral (+ = shooter's right), forward, height]
-      pocket: [0.1, 0.3, 1.05],
-      setPoint: [0.16, 0.22, 1.85],
+      pocket: [0.1, 0.41, 1.05],
+      setPoint: [0.16, 0.32, 1.85],
       releasePoint: [0.18, 0.3, 2.1],
 
       // Pump fake (seconds since the fake began)
-      fakeTopPoint: [0.12, 0.27, 1.62], // ball at the chin: sells the shot
+      fakeTopPoint: [0.12, 0.34, 1.62], // ball at the chin: sells the shot
       fakeRise: 0.17,
       fakeHold: 0.07,
       fakeReturn: 0.22,
@@ -148,9 +148,17 @@ ISO.ShootingSystem = class {
   // Begin a gather (becomes a shot or a pump fake). handWorld(side, out) gives
   // a hand's world position so the gather starts exactly where the hands are.
   // dribbleHand is where the ball goes back to after a fake.
-  start(loco, handWorld, dribbleHand = 'right') {
+  // opts: { variant: 'sidestep', sideDir: Vector3 (world hop direction),
+  //         balance: 0..1 (1 = set and square; lower widens the aim spread) }
+  start(loco, handWorld, dribbleHand = 'right', opts = {}) {
     this.isShooting = true;
     this.shotCommitted = false;
+    this.variant = opts.variant || null;
+    this.shotType = this.variant === 'sidestep' ? 'sidestep' : 'jumpshot';
+    this.balance = opts.balance ?? 1;
+    // A side-step hops sideways first; the jump-shot timeline starts on landing.
+    this.pre = this.variant === 'sidestep' ? ISO.OFFENSE.sideStep.hopTime : 0;
+    this.sideDir = opts.sideDir ? opts.sideDir.clone() : null;
     this.isPumpFaking = false;
     this.t = 0;
     this.shotPhase = 'gather';
@@ -173,6 +181,8 @@ ISO.ShootingSystem = class {
       hands: this.hands.map((h) => this._toLocal(loco, handWorld(h.side, new THREE.Vector3()))),
     };
     this._tookOff = false;
+    // (a side-step decides fake vs. shot after the hop, like a normal gather:
+    //  let go during the hop = side-step pump fake, keep holding = jumper)
   }
 
   // Advance the timeline. `held` = Space is down; `releaseAge` = how long ago
@@ -185,7 +195,9 @@ ISO.ShootingSystem = class {
     if (!this.isShooting) return null;
     const s = this.settings;
     this.t += dt;
-    const t = this.t;
+    const t = this.shotTime;   // shot timeline (after any side-step hop)
+
+    if (t < 0) return this._updateHop(loco);
 
     // Undecided gather: a quick tap turns into a pump fake.
     if (!this.shotCommitted) {
@@ -199,6 +211,7 @@ ISO.ShootingSystem = class {
     // Space released (or held too long) decides when the arm extends.
     if (this.shotCommitted && this.inputReleaseTime === null && (!held || t >= s.autoRelease)) {
       this.inputReleaseTime = held ? s.autoRelease : Math.min(s.autoRelease, Math.max(0, t - releaseAge));
+      // (released during a side-step hop counts as a very early release)
       this._judge(this.inputReleaseTime);
     }
     if (this.inputReleaseTime !== null && this.extendStart === null) {
@@ -254,7 +267,7 @@ ISO.ShootingSystem = class {
     if (this.isPumpFaking) { this._placeFake(dt, loco); return; }
     if (!this.isShooting) return;
     const s = this.settings;
-    const t = this.t;
+    const t = this.shotTime;
     const jumpY = this.jumpHeight(t);
 
     if (!this.ballReleased) {
@@ -268,6 +281,27 @@ ISO.ShootingSystem = class {
     }
 
     this._placeHands(t, jumpY, loco);
+  }
+
+  // Time on the jump-shot timeline (negative during a side-step hop).
+  get shotTime() { return this.t - (this.pre || 0); }
+
+  // Side-step: plant and hop sideways (feet barely leave the floor), facing
+  // the rim, then the jump shot starts on landing.
+  _updateHop(loco) {
+    const O = ISO.OFFENSE.sideStep;
+    const u = Math.min(1, this.t / this.pre);
+    this.shotPhase = 'sidestep';
+    this.shotMeter = 0;
+    const d = this.drive;
+    d.facing = this._facingToBasket(loco);
+    const speed = (O.hopDist / this.pre) * (Math.PI / 2) * Math.sin(Math.PI * u);
+    d.velocity.copy(this.sideDir).multiplyScalar(speed);
+    d.weight = 0.9;
+    // Hop direction relative to the body, for the leg pose (+ = character right).
+    this._frame(d.facing);
+    this._hopSide = Math.sign(this.sideDir.dot(this._right)) || 1;
+    return d;
   }
 
   // Body height added by the jump at time t (a real gravity arc).
@@ -285,7 +319,7 @@ ISO.ShootingSystem = class {
     if (this.isPumpFaking) return { hands: this.hands, body: this.body, stance: 1 };
     if (!this.isShooting) return null;
     // Keep the athletic stance until landing, then let it relax.
-    return { hands: this.hands, body: this.body, stance: this.t < this.settings.land ? 1 : 0 };
+    return { hands: this.hands, body: this.body, stance: this.shotTime < this.settings.land ? 1 : 0 };
   }
 
   getShotPose() {
@@ -294,7 +328,10 @@ ISO.ShootingSystem = class {
       return { fake: true, u: this._fake.t / s.fakeEnd, rise: s.fakeRise / s.fakeEnd, hold: (s.fakeRise + s.fakeHold) / s.fakeEnd };
     }
     if (!this.isShooting) return null;
-    return { t: this.t, gatherEnd: s.gatherTime, takeoff: s.takeoff, land: s.land, end: s.end, jumpY: this.jumpHeight(this.t) };
+    const t = this.shotTime;
+    const pose = { t, gatherEnd: s.gatherTime, takeoff: s.takeoff, land: s.land, end: s.end, jumpY: this.jumpHeight(t) };
+    if (this.pre > 0 && t < 0.12) pose.hop = { u: Math.min(1, this.t / this.pre), side: this._hopSide };
+    return pose;
   }
 
   // ---- accuracy ----------------------------------------------------------------
@@ -338,7 +375,13 @@ ISO.ShootingSystem = class {
   // ones long. Randomness comes from the seeded rng.
   aimError(offset, dist, releasePos) {
     const a = this.settings.accuracy;
-    const spread = this.shotSpread(this.offGreen(offset), dist, releasePos);
+    let spread = this.shotSpread(this.offGreen(offset), dist, releasePos);
+    // Balance: a moving, hopping or tired shooter is less accurate. Off-green
+    // spread grows; even a green release picks up a little spread when the
+    // shooter is clearly off balance (green window itself is unchanged).
+    const bal = this.balance ?? 1;
+    if (spread > 0) spread *= 1 + (1 - bal) * 1.5;
+    else spread = Math.max(0, 0.9 - bal) * 0.12;
     if (spread <= 0) return { depth: 0, lateral: 0, spread: 0 };
     const bias = Math.sign(offset) * a.timingBias;
     return {
@@ -374,7 +417,14 @@ ISO.ShootingSystem = class {
   _ballLocal(t, jumpY, out, loco) {
     const s = this.settings;
     let p;
-    if (t < s.gatherTime) {
+    if (this.pre > 0 && t < s.gatherTime) {
+      // Side-step: the ball is gathered during the hop and waits in the pocket.
+      if (t < 0) {
+        const u = (t + this.pre) / this.pre, T = this.pre;
+        p = [0, 1, 2].map((i) => hermite(this._start.ball[i], this._start.vel[i] * T, s.pocket[i], 0, u));
+      } else p = s.pocket.slice();
+      p[2] = Math.max(this.ball.radius, p[2]);
+    } else if (t < s.gatherTime) {
       // Hermite from wherever the ball was (with its velocity) into the pocket.
       const u = t / s.gatherTime, T = s.gatherTime;
       const a = this._start.ball, v = this._start.vel, b = s.pocket;
@@ -399,7 +449,7 @@ ISO.ShootingSystem = class {
     if (!this.ballReleased) {
       this._twoHands(b);
       // Blend in from where the hands actually were so nothing snaps.
-      const g = smoothstep(0, 0.16, t);
+      const g = smoothstep(0, 0.16, this.t);
       if (g < 1) {
         for (let i = 0; i < 2; i++) {
           const h = this._start.hands[i];
@@ -468,7 +518,7 @@ ISO.ShootingSystem = class {
     const t = f.t, r = this.ball.radius;
     const side = this.handBack === 'right' ? 1 : -1;
     // Where the dribble picks the ball back up (top of its bounce, in the hand).
-    const back = [0.34 * side, 0.27, 0.8];
+    const back = [0.34 * side, 0.32, 0.8];
 
     let p;
     if (t < s.fakeRise) {

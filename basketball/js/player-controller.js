@@ -18,7 +18,10 @@ ISO.PlayerController = class {
     this.stepBack = new ISO.StepBackMove();
     this.shooting = ball ? new ISO.ShootingSystem(ball) : null;
     this.passing = ball ? new ISO.PassingSystem(ball) : null;
-    this._shotWanted = false;    // Space pressed but the shot couldn't start yet
+    this.finishing = ball ? new ISO.FinishSystem(ball) : null;
+    if (this.finishing) this.finishing.setRng(() => this.shooting.rng());
+    // Input -> moves, chaining, fatigue and contextual Space (offense-controller.js).
+    this.offenseController = ball ? new ISO.OffenseController(this) : null;
     if (ball) ball.holder = this;
     this._updateBallHandling(0);
 
@@ -43,60 +46,20 @@ ISO.PlayerController = class {
     return !!this.ball && this.ball.holder === this;
   }
 
-  // True while a move owns the ball and body (gather/shot, pump fake, pass).
+  // Fatigue / chain tracking (OffenseState), for Gather and future systems.
+  get offense() { return this.offenseController ? this.offenseController.offense : null; }
+
+  // True while a move owns the ball and body (gather/shot, pump fake, finish, pass).
   get busy() {
-    return this.shooting.busy || this.passing.isPassing;
+    return this.shooting.busy || this.finishing.busy || this.passing.isPassing;
   }
 
-  // Ball-handling moves. Presses are consumed every frame, so a press that
-  // can't act right now is dropped rather than queued to fire later. Rules:
-  //   - nothing else starts during a shot gather/jump, a pump fake or a pass
-  //   - E is ignored during a step-back, Q during a crossover
-  //   - Space during a crossover (or a step-back's push) starts the gather as
-  //     soon as that move allows it, but only if Space is still held
-  //   - F needs a pass target; with none, possession is kept
+  // Ball-handling moves are run by the OffenseController (see its header for
+  // the rules). Here: catching a returned pass and getting the ball back.
   _handleMoves(dt) {
-    const crossPressed = this.input.consumePress('crossover');
-    const stepPressed = this.input.consumePress('stepBack');
-    const passPressed = this.input.consumePress('pass');
-    const shootPressed = this.input.consumePress('shoot');
-    const shootHeld = this.input.isDown('shoot');
     if (!this.dribble) return;
-    const sb = this.stepBack, dr = this.dribble, sh = this.shooting, pa = this.passing;
-    const loco = this.locomotion;
-    pa.beginFrame();
-    const handWorld = (side, out) => this.model.getHandWorld(side, out);
-    const canAct = () => this.hasBall && dr.active && !this.busy;
-
-    // Space: tap = pump fake, hold = jump shot (ShootingSystem decides).
-    if (shootPressed && !this.busy) this._shotWanted = true;
-    if (!shootHeld && !shootPressed) this._shotWanted = false;
-    if (this._shotWanted && canAct() && !dr.isCrossingOver && (!sb.isSteppingBack || sb.stepBackPhase === 'land')) {
-      this._shotWanted = false;
-      if (sb.isSteppingBack) sb.endEarly(); // flow straight from the landing into the shot
-      sh.start(loco, handWorld, dr.hand);
-      dr.stop();
-    }
-
-    if (canAct()) {
-      if (crossPressed && !sb.isSteppingBack) dr.requestCrossover();
-      if (stepPressed && !dr.isCrossingOver) sb.request(loco);
-      if (passPressed && !dr.isCrossingOver && !sb.isSteppingBack && pa.request(loco, handWorld)) dr.stop();
-    }
-
-    // Moves steer the body through Locomotion's drive hook (step-back, shot,
-    // fake, pass), speedScale (crossover push) and accelScale (the sharp
-    // burst right after a crossover). Movement physics themselves are unchanged.
-    const sbDrive = sb.update(dt, loco);
-    const shotDrive = sh.update(dt, loco, shootHeld, this.input.releaseAge('shoot', dt));
-    const passDrive = pa.update(dt, loco);
-    loco.drive = shotDrive || passDrive || sbDrive;
-    loco.speedScale = dr.isCrossingOver && dr.crossoverProgress < dr.settings.xBounceAt ? dr.settings.xSpeedScale : 1;
-    loco.accelScale = 1 + 0.7 * dr.crossoverBurst;
-    dr.leadScale = sb.isSteppingBack ? 0 : 1;
-
-    // A pump fake hands the ball straight back to the dribble.
-    if (sh.pumpFakeCompleted) dr.resume(sh.handBack);
+    this.offenseController.update(dt);
+    const loco = this.locomotion, dr = this.dribble;
 
     const ball = this.ball;
     if (ball.mode !== ISO.Basketball.MODES.FREE || this.busy) return;
@@ -122,7 +85,10 @@ ISO.PlayerController = class {
   _updateBallHandling(dt) {
     const state = this._modelState();
     let pose = {};
-    if (this.shooting && this.shooting.busy) {
+    if (this.finishing && this.finishing.busy) {
+      this.finishing.place(dt, this.locomotion);
+      pose = { dribble: this.finishing.getPose(), finish: this.finishing.getFinishPose() };
+    } else if (this.shooting && this.shooting.busy) {
       this.shooting.place(dt, this.locomotion);
       pose = { dribble: this.shooting.getPose(), shot: this.shooting.getShotPose() };
     } else if (this.passing && this.passing.isPassing) {

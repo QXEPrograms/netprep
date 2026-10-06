@@ -86,13 +86,15 @@ ISO.PlayerModel = class {
     this.arms = [-1, 1].map((side) => {
       const shoulder = pivot(this.torso, side * 0.27, 0.44, 0);
       mesh(new THREE.SphereGeometry(0.075, 10, 8), jersey, shoulder, 0, 0, 0);
-      mesh(new THREE.CapsuleGeometry(0.052, 0.22, 4, 8), skin, shoulder, 0, -0.16, 0);
-      const elbow = pivot(shoulder, 0, -0.31, 0);
-      mesh(new THREE.CapsuleGeometry(0.045, 0.2, 4, 8), skin, elbow, 0, -0.13, 0);
-      mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 10), mat(0xffffff, 0.6), elbow, 0, -0.2, 0); // wristband
-      const hand = mesh(new THREE.SphereGeometry(0.055, 10, 8), skin, elbow, 0, -0.29, 0);
+      mesh(new THREE.CapsuleGeometry(0.052, 0.25, 4, 8), skin, shoulder, 0, -0.17, 0);
+      const elbow = pivot(shoulder, 0, -ARM_L1, 0);
+      mesh(new THREE.CapsuleGeometry(0.045, 0.23, 4, 8), skin, elbow, 0, -0.145, 0);
+      mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 10), mat(0xffffff, 0.6), elbow, 0, -0.23, 0); // wristband
+      const hand = mesh(new THREE.SphereGeometry(0.055, 10, 8), skin, elbow, 0, -ARM_L2, 0);
       // ikWeight: smoothed 0..1 blend from the free (guard/run) pose to the IK reach
-      return { side, shoulder, elbow, hand, ikWeight: 0, ikTarget: new THREE.Vector3() };
+      // shrug: smoothed shoulder lift when reaching high (dunks, layups)
+      return { side, shoulder, elbow, hand, ikWeight: 0, ikTarget: new THREE.Vector3(),
+        base: shoulder.position.clone(), shrug: 0 };
     });
 
     // Legs: hip -> knee -> foot
@@ -161,12 +163,14 @@ ISO.PlayerModel = class {
     this.phase += (state.speed / strideLen) * Math.PI * dt;
 
     const s = this.stride;
-    const swing = (0.55 + 0.35 * sprintAmt) * s;
     const p = this.phase;
 
     // Leg flex (crouch) keeps the feet planted: thigh forward, shin back, foot level.
+    // (crouch < 0 = rising tall, e.g. the hesitation)
     const extra = pose.dribble ? pose.dribble.body : NO_BODY;
-    const flex = 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * extra.crouch;
+    const strideMul = extra.stride ?? 1;     // < 1 = short, choppy steps (spin, behind-the-back)
+    const swing = (0.55 + 0.35 * sprintAmt) * s * strideMul;
+    const flex = Math.max(0, 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * extra.crouch);
 
     // Hips can shift sideways (weight shift); the legs angle back so the feet
     // stay planted. sway > 0 = toward the character's right (local -x).
@@ -182,10 +186,11 @@ ISO.PlayerModel = class {
       const jab = extra.jab ? Math.max(0, (leg.side < 0 ? 1 : -1) * extra.jab) : 0;
       // (the jab goes out to the side, not forward, so the knee stays clear of the ball)
       leg.hip.rotation.set(-sw * swing - flex - 0.15 * jab, 0, legLean + leg.side * wide + leg.side * 0.22 * jab);
-      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 2 * flex + 0.4 * jab;
+      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 * strideMul + 0.15) * s + 2 * flex + 0.4 * jab;
       leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex - 0.2 * jab;
     });
     this.body.position.x = -sway;
+    this.body.position.z = extra.forward || 0;   // hips slide forward (behind-the-back room)
 
     // Arms swing opposite to the legs; elbows stay bent like a runner.
     this.arms.forEach((arm, i) => {
@@ -203,7 +208,7 @@ ISO.PlayerModel = class {
 
     const targetLean = 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance + 0.1 * extra.crouch;
     this.lean += (targetLean - this.lean) * k;
-    const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s));
+    const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s)) * (extra.turnRoll ?? 1);
     this.roll += (targetRoll - this.roll) * k;
     this.torso.rotation.x = this.lean + 0.06 * (1 - s);
     this.body.rotation.z = this.roll + extra.roll;
@@ -214,8 +219,10 @@ ISO.PlayerModel = class {
 
     if (pose.stepBack) this._poseStepBack(pose.stepBack);
     if (pose.shot) pose.shot.fake ? this._poseFake(pose.shot) : this._poseShot(pose.shot);
+    if (pose.shot && pose.shot.hop) this._poseHop(pose.shot.hop);
     if (pose.pass) this._posePass(pose.pass);
-    this._crossfade(dt, pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
+    if (pose.finish) this._poseFinish(pose.finish);
+    this._crossfade(dt, pose.finish ? 'finish' : pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
     this._poseArms(dt, pose.dribble);
   }
 
@@ -223,7 +230,7 @@ ISO.PlayerModel = class {
   getHandWorld(side, out) {
     this.root.updateMatrixWorld(true);
     const arm = this.arms.find((a) => a.side === -side);
-    return arm.elbow.localToWorld(out.set(0, -0.29, 0));
+    return arm.elbow.localToWorld(out.set(0, -ARM_L2, 0));
   }
 
   // Jump shot legs/body. Keys are placed on the shot's own timeline:
@@ -286,6 +293,62 @@ ISO.PlayerModel = class {
     this.torso.rotation.x = lerp(this.torso.rotation.x, k[3], w);
     this.torso.rotation.y = lerp(this.torso.rotation.y, 0.1, w);
     this.head.rotation.x = lerp(this.head.rotation.x, -0.15, w * bellCurve(u, rise * 0.5, hold + 0.1)); // eyes up at the rim
+  }
+
+  // Layup / dunk / floater legs and body. One-foot takeoff for layups and
+  // floaters (the finishing-hand knee drives up), two feet for dunks; the
+  // height comes from the finish's own jump arc.
+  _poseFinish(f) {
+    const keys = FINISH_KEYS[f.kind].map((k) => [f[k[0]] + k[6], k[1], k[2], k[3], k[4], k[5]]);
+    if (f.kind === 'layup' && f.protected) keys.forEach((k) => { k[1] *= 0.8; });
+    const t = f.t;
+    const w = smoothstep(f.takeoff - 0.2, f.takeoff - 0.08, t) * (1 - smoothstep(f.end - 0.12, f.end, t));
+    if (w <= 0) return;
+    const k = sampleKeys(keys, t);
+    const drive = f.lead > 0 ? this.legs[0] : this.legs[1];
+    const jump = drive === this.legs[0] ? this.legs[1] : this.legs[0];
+    const air = smoothstep(f.takeoff, f.takeoff + 0.06, t) * (1 - smoothstep(f.land - 0.06, f.land, t));
+    const set = (leg, hip, knee) => {
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, hip, w);
+      leg.hip.rotation.z = lerp(leg.hip.rotation.z, leg.side * 0.04, w);
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, knee, w);
+      const flat = -(hip + knee) * 0.9;
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, lerp(flat, 0.5, air), w);   // toes down in the air
+    };
+    set(drive, k[1], k[2]);
+    set(jump, k[3], k[4]);
+    const reach = (h, kn) => 0.44 * Math.cos(h) + 0.41 * Math.cos(h + kn);
+    const grounded = Math.max(reach(k[1], k[2]), reach(k[3], k[4])) + 0.0675 - 0.92;
+    this.body.position.y = lerp(this.body.position.y, lerp(grounded, 0, air) + f.jumpY, w);
+    this.body.position.x = lerp(this.body.position.x, 0, w);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, k[5], w);
+    this.torso.rotation.y = lerp(this.torso.rotation.y, 0.12 * f.lead * air, w);
+    this.body.rotation.z = lerp(this.body.rotation.z, 0, w);
+    this.head.rotation.x = lerp(this.head.rotation.x, -0.25, w * air);   // eyes on the rim
+  }
+
+  // Side-step hop: the lead foot reaches out sideways, the body hops low and
+  // lands on a wide base. u = 0..1 over the hop, side = +1 toward character right.
+  _poseHop({ u, side }) {
+    const w = smoothstep(0, 0.12, u) * (1 - smoothstep(0.85, 1, u));
+    if (w <= 0) return;
+    const lead = side > 0 ? this.legs[0] : this.legs[1];
+    const reachOut = bellCurve(u, 0.05, 0.75);
+    const land = smoothstep(0.6, 0.95, u);
+    for (const leg of this.legs) {
+      const isLead = leg === lead;
+      const hip = isLead ? -0.35 - 0.1 * reachOut : -0.45 + 0.15 * reachOut;
+      const knee = isLead ? 0.65 + 0.2 * reachOut : 0.95 - 0.5 * reachOut + 0.3 * land;
+      const out = leg.side * (isLead ? 0.3 * reachOut + 0.08 * land : 0.06 + 0.06 * land);
+      leg.hip.rotation.x = lerp(leg.hip.rotation.x, hip, w);
+      leg.hip.rotation.z = lerp(leg.hip.rotation.z, out, w);
+      leg.knee.rotation.x = lerp(leg.knee.rotation.x, knee, w);
+      leg.ankle.rotation.x = lerp(leg.ankle.rotation.x, -(hip + knee) * 0.9, w);
+    }
+    const hop = ISO.OFFENSE.sideStep.hopHeight * Math.sin(Math.PI * Math.min(1, u * 1.1));
+    this.body.position.y = lerp(this.body.position.y, -0.1 - 0.05 * land + hop, w);
+    this.body.rotation.z = lerp(this.body.rotation.z, side * 0.1 * reachOut, w);
+    this.torso.rotation.x = lerp(this.torso.rotation.x, 0.2, w);
   }
 
   // Chest pass: a small step into the pass with the chest squared up.
@@ -389,6 +452,16 @@ ISO.PlayerModel = class {
       arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -0.55, st);
       arm.shoulder.rotation.z = lerp(arm.shoulder.rotation.z, arm.side * 0.32, st);
       arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, -1.15, st);
+      // Shrug: when the target is out of reach above the shoulder, lift the
+      // shoulder toward it a little (how real players reach for the rim).
+      let shrugWant = 0;
+      if (req && want > 0) {
+        const d = this.torso.worldToLocal(this._ik.d.copy(arm.ikTarget)).sub(arm.base);
+        const over = d.length() - (ARM_L1 + ARM_L2) * 0.97;
+        if (over > 0 && d.y > 0) shrugWant = Math.min(MAX_SHRUG, over) * (d.y / d.length());
+      }
+      arm.shrug += (shrugWant * arm.ikWeight - arm.shrug) * k;
+      arm.shoulder.position.set(arm.base.x, arm.base.y + arm.shrug, arm.base.z + 0.3 * arm.shrug);
       if (arm.ikWeight < 0.002) continue;
 
       const freeQ = this._qFree.copy(arm.shoulder.quaternion);
@@ -404,7 +477,7 @@ ISO.PlayerModel = class {
   // in the plane of the target and a pole direction (back and out, like a real
   // elbow), then the shoulder's basis is built from that plane.
   solveArmIK(arm, target) {
-    const L1 = 0.31, L2 = 0.29; // shoulder->elbow, elbow->hand
+    const L1 = ARM_L1, L2 = ARM_L2; // shoulder->elbow, elbow->hand
     const v = this._ik;
     this.root.updateMatrixWorld(true);
 
@@ -440,7 +513,38 @@ ISO.PlayerModel = class {
   }
 };
 
-const NO_BODY = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0 };
+const ARM_L1 = 0.34, ARM_L2 = 0.32;   // upper arm, forearm (to the hand center)
+const MAX_SHRUG = 0.1;
+const NO_BODY = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0, stride: 1, forward: 0 };
+// Finishes: [time key, driveHip, driveKnee, jumpHip, jumpKnee, torsoLean]
+// (drive leg = finishing-hand side; it lifts on one-foot takeoffs). Time keys
+// are names on the finish timeline plus an offset in seconds.
+const FINISH_KEYS = {
+  layup: [
+    ['takeoff', -0.30, 0.55, -0.55, 1.05, 0.20, -0.08],  // plant the jump foot
+    ['takeoff', -1.35, 1.70,  0.05, 0.12, 0.04,  0.10],  // knee drives up, jump leg extends
+    ['release', -1.15, 1.50,  0.00, 0.25,-0.02,  0.00],  // extend to the rim
+    ['land',    -0.35, 0.45, -0.20, 0.35, 0.02, -0.10],  // reach for the floor
+    ['land',    -0.60, 1.10, -0.55, 1.05, 0.16,  0.08],  // absorb
+    ['end',     -0.15, 0.30, -0.15, 0.30, 0.06,  0.00],
+  ],
+  dunk: [
+    ['takeoff', -0.78, 1.50, -0.78, 1.50, 0.30, -0.08],  // two-foot gather, deep dip
+    ['takeoff', -0.05, 0.08, -0.05, 0.08, 0.00,  0.08],  // explode
+    ['release', -0.65, 1.30, -0.40, 1.00,-0.06, -0.10],  // knees tuck, reach over the rim
+    ['release', -0.20, 0.50, -0.10, 0.30, 0.14,  0.06],  // throw it down
+    ['land',    -0.30, 0.45, -0.30, 0.45, 0.05, -0.08],
+    ['land',    -0.78, 1.45, -0.72, 1.40, 0.26,  0.10],  // deep landing absorb
+    ['end',     -0.15, 0.30, -0.15, 0.30, 0.06,  0.00],
+  ],
+  floater: [
+    ['takeoff', -0.40, 0.80, -0.50, 0.95, 0.16, -0.06],
+    ['takeoff', -0.85, 1.20, -0.02, 0.10, 0.00,  0.08],  // short knee lift
+    ['land',    -0.30, 0.40, -0.15, 0.30, 0.00, -0.08],
+    ['land',    -0.50, 0.95, -0.50, 0.95, 0.12,  0.07],
+    ['end',     -0.15, 0.30, -0.15, 0.30, 0.06,  0.00],
+  ],
+};
 //                 u     fHip   fKnee  bHip   bKnee  lean   hop
 const STEPBACK_KEYS = [
   [0.00, -0.40, 0.80, -0.40, 0.80, 0.22, 0.00],  // dribble stance

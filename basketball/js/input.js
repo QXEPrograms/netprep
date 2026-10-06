@@ -13,6 +13,11 @@ ISO.Input = class {
       stepBack: ['KeyQ'],
       shoot: ['Space'],
       pass: ['KeyF'],
+      spinLeft: ['KeyZ'],
+      spinRight: ['KeyX'],
+      hesitation: ['KeyC'],
+      behindBack: ['KeyV'],
+      inAndOut: ['KeyR'],
     };
     // Fresh presses (not OS key-repeat) waiting to be consumed, per key code.
     this.presses = new Set();

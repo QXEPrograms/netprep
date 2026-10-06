@@ -11,8 +11,13 @@
 // MISSED when the ball reaches the floor without one (or is handed back, or
 // times out). Each released shot resolves exactly once.
 ISO.ScoringSystem = class {
-  constructor({ shooting, hoop, ball }) {
+  // shooters: every system that can release a scoring shot (ShootingSystem,
+  // FinishSystem). Each exposes shotReleased (frame flag), releaseFeet,
+  // releaseTiming and shotType.
+  constructor({ shooting, shooters, hoop, ball }) {
     this.shooting = shooting;
+    this.shooters = shooters || [shooting];
+    this.shotId = 0;
     this.hoop = hoop;
     this.ball = ball;
     this.points = ISO.CONFIG.scoring;
@@ -43,15 +48,16 @@ ISO.ScoringSystem = class {
   // Call once per frame after the ball has updated.
   update(dt) {
     this.resolvedThisFrame = null;
-    const sh = this.shooting;
+    const sh = this.shooters.find((s) => s && s.shotReleased);
 
-    if (sh.shotReleased) {
+    if (sh) {
       // A new shot leaves the hand (an unresolved previous one counts as missed).
       if (this.pending) this._resolve(false, false);
       const f = sh.releaseFeet;
       const isThree = ISO.ScoringSystem.isThreePoint(f.x, f.z);
       this.pending = {
-        id: sh.shotCount,
+        id: ++this.shotId,
+        shotType: sh.shotType || 'jumpshot',
         isThree,
         value: isThree ? this.points.outside : this.points.inside,
         timing: sh.releaseTiming,
@@ -82,7 +88,7 @@ ISO.ScoringSystem = class {
       this.makes++;
       if (p.isThree) this.threeMakes++;
     }
-    this.lastResult = { id: p.id, made, swish, points, value: p.value, isThree: p.isThree, timing: p.timing };
+    this.lastResult = { id: p.id, made, swish, points, value: p.value, isThree: p.isThree, timing: p.timing, shotType: p.shotType };
     this.resolvedThisFrame = this.lastResult;
   }
 };

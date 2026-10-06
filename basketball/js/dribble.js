@@ -6,6 +6,12 @@
 //   DRIBBLE    normal one-hand dribble with the current `hand`.
 //   CROSSOVER  ball is pushed low across the front of the body to the other
 //              hand, which takes over control when it arrives.
+//   MOVE       another dribble move (spin, hesitation, in-and-out,
+//              behind-the-back; see dribble-moves.js) owns the ball.
+//
+// Moves can chain: once a move's cancel window opens (OFFENSE.chain), the
+// next one starts from wherever the ball really is. Body pose extras are
+// smoothed so switching moves never snaps the body.
 //
 // One dribble cycle (phase 0..1):
 //   0.0  ball at the hand (top)  -> pushed down
@@ -23,7 +29,7 @@
 //   crossoverFakeDirection / crossoverFakeWorldDir (the body fake goes this way
 //   first), crossoverBurst (sharp-acceleration window after the ball crosses)
 (function () {
-const MODES = { DRIBBLE: 'dribble', CROSSOVER: 'crossover' };
+const MODES = { DRIBBLE: 'dribble', CROSSOVER: 'crossover', MOVE: 'move' };
 
 ISO.DribbleController = class {
   constructor(ball) {
@@ -79,7 +85,20 @@ ISO.DribbleController = class {
       { side: 1, target: new THREE.Vector3(), weight: 1 },
       { side: -1, target: new THREE.Vector3(), weight: 0 },
     ];
-    this.body = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0 };
+    this.body = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0, stride: 1, forward: 0, turnRoll: 1 };
+    this.bodyOut = { crouch: 0, twist: 0, roll: 0, sway: 0, jab: 0, stride: 1, forward: 0, turnRoll: 1 };
+
+    // Other dribble moves (persistent instances so their state is readable).
+    const M = ISO.DribbleMoves;
+    this.moves = {
+      spin: new M.SpinMove(),
+      hesitation: new M.HesitationMove(),
+      inAndOut: new M.InAndOutMove(),
+      behindBack: new M.BehindBackMove(),
+    };
+    this.move = null;                   // the move running in MOVE mode
+    this.moveExited = null;             // { name, strength } on the frame a move ends cleanly
+    this.execScale = 1;                 // fatigue: >1 makes moves a little slower
 
     this._ballPos = new THREE.Vector3();
     this._fwd = new THREE.Vector3();
@@ -107,8 +126,135 @@ ISO.DribbleController = class {
     return true;
   }
 
+  // ---- move management ------------------------------------------------------
+
+  // Name of the move in progress ('crossover', 'spin', ...) or null.
+  get currentMove() {
+    if (this.mode === MODES.CROSSOVER) return 'crossover';
+    if (this.mode === MODES.MOVE && this.move) return this.move.name;
+    return null;
+  }
+
+  get moveProgress() {
+    if (this.mode === MODES.CROSSOVER) return this.crossoverProgress;
+    if (this.mode === MODES.MOVE && this.move) return this.move.progress;
+    return 1;
+  }
+
+  // Can `next` ('crossover', 'spin', 'stepBack', 'shot', ...) start right now?
+  // From a plain dribble: yes (dribble moves also respect the short cooldown).
+  // During a move: only once its cancel window is open and the chain allows it.
+  canChain(next) {
+    if (!this.active) return false;
+    const cur = this.currentMove;
+    if (!cur) return next === 'shot' || next === 'stepBack' || this.cooldown <= 0;
+    const cfg = ISO.OFFENSE;
+    return (cfg.chain[cur] || []).includes(next) && this.moveProgress >= cfg.moves[cur].cancelAt;
+  }
+
+  // Start a dribble move by name. opts are passed to the move (e.g. spin dir).
+  startMove(name, mover, opts = {}) {
+    if (!this.canChain(name) || !this._lastPos) return false;
+    if (this.currentMove) this.cancelMove();
+    if (name === 'crossover') { this._startCrossover(); return true; }
+    const move = this.moves[name];
+    move.start(this, mover, opts, this.execScale);
+    this.move = move;
+    this.mode = MODES.MOVE;
+    return true;
+  }
+
+  // Cut the current move short (to chain into something else). The ball keeps
+  // going from where it is; the hand that has it keeps it.
+  cancelMove() {
+    if (this.mode === MODES.CROSSOVER) {
+      if (this.crossoverProgress >= this.settings.xBounceAt) this.hand = this.hand === 'right' ? 'left' : 'right';
+      this.isCrossingOver = false;
+      this._x = null;
+    } else if (this.mode === MODES.MOVE && this.move) {
+      this.hand = this.move.currentHand();
+      this.move.active = false;
+      for (const k of ['isSpinning', 'isHesitating', 'isInAndOut', 'isBehindBack']) if (k in this.move) this.move[k] = false;
+      this.move = null;
+    }
+    this.mode = MODES.DRIBBLE;
+    this.phase = this._phaseForBall();
+  }
+
+  // Dribble phase that matches the ball's current height and direction, so a
+  // cancelled move flows straight back into the normal dribble.
+  _phaseForBall() {
+    const r = this.ball.radius, span = Math.max(0.05, this.top - r);
+    const x = clamp01((this.ball.position.y - r) / span);
+    if (this.ball.velocity.y > 0) return 0.5 + 0.5 * (1 - Math.pow(1 - x, 1 / 1.7));
+    const d = 1 - x; // pushed-down fraction: 0.55u + 0.45u^2 = d
+    return 0.5 * ((-0.55 + Math.sqrt(0.3025 + 1.8 * d)) / 0.9);
+  }
+
+  // Locomotion influence of the current move.
+  getSpeedScale() {
+    if (this.mode === MODES.CROSSOVER) return this.crossoverProgress < this.settings.xBounceAt ? this.settings.xSpeedScale : 1;
+    if (this.mode === MODES.MOVE && this.move) return this.move.speedScale();
+    return 1;
+  }
+
+  getDrive(mover) {
+    return this.mode === MODES.MOVE && this.move ? this.move.drive(mover, this) : null;
+  }
+
+  // ---- helpers used by dribble moves ----------------------------------------
+
+  get radius() { return this.ball.radius; }
+  get right() { return this._right; }
+  get fwd() { return this._fwd; }
+  forward() { return this._forward(); }
+  handLow() { return this._handLow(); }
+
+  // Ball state in the body frame (lead removed), velocity relative to the body.
+  captureBall() {
+    const r = this.ball.radius, p = this.ball.position;
+    const span = Math.max(0.05, this.top - r);
+    const b0 = clamp01(1 - (p.y - r) / span);
+    const rel = this._tmp.copy(p).sub(this._lastPos).addScaledVector(this._lead, -b0);
+    const out = { lat: rel.dot(this._right), fwd: rel.dot(this._fwd), y: p.y };
+    const v = this._tmp.copy(this.ball.velocity).sub(this._lastVel || this._tmp.set(0, 0, 0)).clampLength(0, 7);
+    out.vlat = v.dot(this._right); out.vfwd = v.dot(this._fwd); out.vy = Math.max(-7, Math.min(5, this.ball.velocity.y));
+    return out;
+  }
+
+  // Place the ball at a body-frame spot; returns how low it is (0 top .. 1 floor).
+  place(lat, fwd, y, dt, leadScale = 1) {
+    const r = this.ball.radius;
+    const low = clamp01(1 - (y - r) / Math.max(0.05, this.top - r));
+    this._toWorld(this._mover, lat, fwd, y, low * leadScale, this._ballPos);
+    this.ball.place(this._ballPos, dt);
+    return low;
+  }
+
+  // Hand rides the top of the ball; when the ball goes low it waits at hand
+  // height above (waitLat, waitFwd). outward pushes the palm to the ball's outside.
+  handFollow(side, waitLat, waitFwd, low, weight, outward = 0, lowOffset = 0) {
+    const h = this._hand(side), r = this.ball.radius;
+    const wait = this._toWorld(this._mover, waitLat, waitFwd, 0, 0, this._tmp);
+    h.target.lerpVectors(this._ballPos, wait, low);
+    if (outward) h.target.addScaledVector(this._right, side * outward * (1 - low));
+    h.target.y = Math.max(this._handLow() + lowOffset, this._ballPos.y + r + this.settings.handAbove);
+    h.weight = weight;
+  }
+
+  // Hand cups the ball from the outside (e.g. protecting it during a spin).
+  handCup(side, outward, up, weight) {
+    const h = this._hand(side);
+    h.target.copy(this._ballPos).addScaledVector(this._right, side * outward);
+    h.target.y += up;
+    h.weight = weight;
+  }
+
+  handOff(side) { this._hand(side).weight = 0; }
+
   // Stop dribbling (e.g. the ball is gathered for a shot).
   stop() {
+    if (this.currentMove) this.cancelMove();
     this.active = false;
   }
 
@@ -122,6 +268,7 @@ ISO.DribbleController = class {
     this.crossoverProgress = 0;
     this.cooldown = 0;
     this._x = null;
+    this.move = null;
     this._frameYaw = null;
     this._lead.set(0, 0, 0);
     this._leadTarget.set(0, 0, 0);
@@ -130,6 +277,8 @@ ISO.DribbleController = class {
   // mover: { position, facing, velocity, speed, runSpeed, sprintSpeed }
   update(dt, mover) {
     this.crossoverCompleted = false;
+    this.moveExited = null;
+    for (const k in this.moves) this.moves[k].completed = false;
     if (!this.active) return;
     const s = this.settings;
     this.cooldown = Math.max(0, this.cooldown - dt);
@@ -163,8 +312,31 @@ ISO.DribbleController = class {
     this._leadTarget.copy(mover.velocity).multiplyScalar(s.lead * this.leadScale).clampLength(0, s.maxLead);
     this._lead.lerp(this._leadTarget, dt === 0 ? 1 : 1 - Math.exp(-12 * dt));
 
+    this._mover = mover;
+    this.body.turnRoll = 1;     // only the spin turns this down
     if (this.mode === MODES.CROSSOVER) this._updateCrossover(dt, mover);
-    else this._updateDribble(dt, mover);
+    else if (this.mode === MODES.MOVE) {
+      if (this.move.update(dt, this, mover)) this._finishMove();
+    } else this._updateDribble(dt, mover);
+    this._smoothBody(dt);
+  }
+
+  _finishMove() {
+    const m = this.move;
+    this.hand = m.exitHand;
+    m.finish();
+    this.move = null;
+    this.mode = MODES.DRIBBLE;
+    this.phase = 0;           // ball is in the hand at the top of the dribble
+    this.cooldown = ISO.OFFENSE.moves[m.name].cooldown || 0.1;
+    this.moveExited = { name: m.name, strength: m.exitBurst };
+  }
+
+  // Body pose extras ease toward the requested values so switching between
+  // moves (or back to the dribble) never snaps the body.
+  _smoothBody(dt) {
+    const k = dt > 0 ? 1 - Math.exp(-22 * dt) : 1;
+    for (const key in this.body) this.bodyOut[key] += (this.body[key] - this.bodyOut[key]) * k;
   }
 
   // ---- normal dribble -------------------------------------------------------
@@ -211,6 +383,8 @@ ISO.DribbleController = class {
     this.body.roll = 0;
     this.body.sway = 0;
     this.body.jab = 0;
+    this.body.stride = 1;
+    this.body.forward = 0;
   }
 
   // ---- crossover -------------------------------------------------------------
@@ -232,6 +406,7 @@ ISO.DribbleController = class {
       fwd0: rel.dot(this._fwd),
       y0: p.y,
       vy0: Math.max(-6, Math.min(3, this.ball.velocity.y)),
+      dur: this.settings.xDuration * this.execScale,
     };
 
     this.mode = MODES.CROSSOVER;
@@ -247,7 +422,7 @@ ISO.DribbleController = class {
     const r = this.ball.radius;
     const x = this._x;
     x.t += dt;
-    const u = Math.min(1, x.t / s.xDuration);
+    const u = Math.min(1, x.t / x.dur);
     this.crossoverProgress = u;
     this.crossoverWorldDir.copy(this._right).multiplyScalar(-x.from);
     this.crossoverFakeWorldDir.copy(this._right).multiplyScalar(x.from);
@@ -262,10 +437,10 @@ ISO.DribbleController = class {
     // whatever the ball was doing when the move started.
     let y;
     if (u < uc) {
-      const v = u / uc, T = s.xDuration * uc;
+      const v = u / uc, T = x.dur * uc;
       y = hermite(x.y0, x.vy0 * T, r, -s.xImpactSpeed * T, v);
     } else {
-      const v = (u - uc) / (1 - uc), T = s.xDuration * (1 - uc);
+      const v = (u - uc) / (1 - uc), T = x.dur * (1 - uc);
       y = hermite(r, s.xReboundSpeed * T, this.top, 0, v);
     }
     y = Math.max(r, y);
@@ -308,6 +483,8 @@ ISO.DribbleController = class {
     this.body.roll = 0.12 * x.from * fake + 0.14 * to * shift;
     this.body.sway = 0.07 * x.from * fake + 0.1 * to * shift;   // hips, meters (+ = character right)
     this.body.jab = x.from * bell(u, 0.02, 0.4);                // ball-side foot jabs out
+    this.body.stride = 1;
+    this.body.forward = 0;
 
     if (u >= 1) this._finishCrossover();
   }
@@ -322,13 +499,14 @@ ISO.DribbleController = class {
     this.crossoverCount++;
     this.cooldown = this.settings.xCooldown;
     this._x = null;
+    this.moveExited = { name: 'crossover', strength: 1 };
   }
 
   // ---- shared helpers ---------------------------------------------------------
 
   // Body frame from a facing that turns at a limited rate.
   _updateFrame(dt, mover) {
-    if (this._frameYaw === null || dt === 0) {
+    if (this._frameYaw === null || dt === 0 || (this.mode === MODES.MOVE && this.move && this.move.exactFrame)) {
       this._frameYaw = mover.facing;
     } else {
       let diff = Math.atan2(Math.sin(mover.facing - this._frameYaw), Math.cos(mover.facing - this._frameYaw));
@@ -341,6 +519,8 @@ ISO.DribbleController = class {
     this._fwd.set(Math.sin(f), 0, Math.cos(f));
     this._right.set(-Math.cos(f), 0, Math.sin(f));
     this._lastPos = mover.position;
+    this._lastVel = mover.velocity;
+    this._mover = mover;
   }
 
   _forward() {
@@ -369,7 +549,7 @@ ISO.DribbleController = class {
   // Pose request for PlayerModel.
   getPose() {
     if (!this.active) return null;
-    return { hands: this.hands, body: this.body };
+    return { hands: this.hands, body: this.bodyOut };
   }
 };
 
