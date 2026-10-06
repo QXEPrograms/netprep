@@ -49,6 +49,10 @@ ISO.DefensiveLocomotion = class {
     this.mode = 'stance';
     this.isPlanting = false;
     this.speedScale = 1;         // e.g. frozen after biting on a fake
+    this.turnScale = 1;          // facing assist rate multiplier (reaches, reactions)
+    this.acceleration = new THREE.Vector3();
+    this._prevV = new THREE.Vector3();
+    this.reaction = null;        // { level, t, duration, dir, carrySpeed, inputShare } while balance is broken
 
     this.defensiveFacingTarget = new THREE.Vector3();
     this.defensiveFacingAngle = 0;
@@ -97,7 +101,14 @@ ISO.DefensiveLocomotion = class {
 
   update(dt, intent) {
     const s = this.settings, J = this.jumpCfg;
-    if (intent.jump) this.requestJump();
+    // acceleration (smoothed) — the balance model reads it
+    if (dt > 0) {
+      const ka = 1 - Math.exp(-14 * dt);
+      this.acceleration.x += ((this.velocity.x - this._prevV.x) / dt - this.acceleration.x) * ka;
+      this.acceleration.z += ((this.velocity.z - this._prevV.z) / dt - this.acceleration.z) * ka;
+    }
+    this._prevV.copy(this.velocity);
+    if (intent.jump && !this.reaction) this.requestJump();
     this.jumpTime += dt;
     const target0 = intent.faceTarget;
     const toT0 = target0 ? Math.atan2(target0.x - this.position.x, target0.z - this.position.z) : this.facing;
@@ -118,6 +129,25 @@ ISO.DefensiveLocomotion = class {
     }
     if (this.jumpState === 'land' && this.jumpTime >= J.landTime) this.jumpState = 'ground';
     const landing = this.jumpState === 'land';
+
+    // ---- balance broken (stumble / stagger / fall): the committed momentum
+    // carries the body the wrong way; the player/AI only partly steers ----
+    if (this.reaction) {
+      const r = this.reaction, v = this.velocity;
+      r.t += dt;
+      const u = Math.min(1, r.t / r.duration);
+      const carry = r.carrySpeed * Math.max(0, 1 - u * 1.6);
+      const steer = r.inputShare * u;                      // control comes back through it
+      const wx = r.dir.x * carry + intent.velocity.x * steer, wz = r.dir.z * carry + intent.velocity.z * steer;
+      const dvx = wx - v.x, dvz = wz - v.z, dv = Math.hypot(dvx, dvz);
+      if (dv > 0) { const st = Math.min(dv, s.decel * dt); v.x += dvx / dv * st; v.z += dvz / dv * st; }
+      this.mode = 'stance';
+      this.isPlanting = false;
+      this._integrate(dt);
+      this._face(dt, target0, toT0, 0.2 + 0.8 * u * u);
+      if (r.t >= r.duration) this.reaction = null;
+      return;
+    }
 
     const want = this._want.set(intent.velocity.x, 0, intent.velocity.z);
     const wantSpeed = want.length();
@@ -224,7 +254,7 @@ ISO.DefensiveLocomotion = class {
     if (target) this.defensiveFacingTarget.copy(target);
     this.defensiveFacingAngle = goal;
     const err = wrap(goal - this.facing);
-    const maxRate = rateScale * (this.mode === 'run' ? F.turnRateRun : F.turnRate) * (this.isPlanting ? F.plantTurnScale : 1);
+    const maxRate = rateScale * this.turnScale * (this.mode === 'run' ? F.turnRateRun : F.turnRate) * (this.isPlanting ? F.plantTurnScale : 1);
     const wantRate = Math.max(-maxRate, Math.min(maxRate, err * F.gain));
     const dr = wantRate - this.turnSpeed;
     this.turnSpeed += Math.sign(dr) * Math.min(Math.abs(dr), F.turnAccel * dt);

@@ -91,10 +91,16 @@ ISO.Game = class {
     // possessions (possession.js).
     this.possession = new ISO.PossessionSystem({ roster: this.roster, ball: this.ball, hoop: this.hoopPhysics, scoring: this.scoring, events: this.events });
     this.possession.onReset = (e) => this._onPossessionReset(e);
+    // Steals (physical reach vs the dribble) and ankle breaks (offensive
+    // counters vs committed defensive weight): defense-interactions.js.
+    this.steals = new ISO.StealSystem({ ball: this.ball, roster: this.roster, possession: this.possession, scoring: this.scoring, events: this.events });
+    this.ankleBreaks = new ISO.AnkleBreakSystem({ roster: this.roster, possession: this.possession, events: this.events });
 
     this.ui = new ISO.UI(document.getElementById('hud'), { role: 'offense', teams: this.roster.teams, roster: this.roster, bindings: this.input.bindings });
     this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
     this.events.on('gameWon', (e) => this.ui.showWin(e));
+    this.events.on('steal', (e) => this.ui.showSteal(e, this.localPlayer.id));
+    this.events.on('ankleBreak', (e) => { if (e.reactionLevel >= 2) this.ui.showAnkleBreaker(e); });
     if (ISO.CONFIG.debugPhysics) {
       const hud = document.getElementById('hud');
       this.offenseDebug = new ISO.OffenseDebug(this.scene, this.roster.players[0].offense, hud);
@@ -166,6 +172,8 @@ ISO.Game = class {
         p.bot.startPossession();
       }
     }
+    if (this.steals) this.steals.reset();
+    if (this.ankleBreaks) this.ankleBreaks.reset();
     // A reference scenario re-places everyone (or restarts with the right team).
     if (this.scenario && this.scenario.apply(this)) return;
     if (this.offenseDebug) this.offenseDebug.p = this.player;
@@ -193,6 +201,10 @@ ISO.Game = class {
     for (const p of defense) p.defense.update(dt);
     for (const p of offense) p.offense.update(dt);
     for (const p of defense) p.defense.updateVisual(dt);
+    // Reaches against the dribble (hands are where they are drawn), then the
+    // offensive counters against the defenders' weight.
+    this.steals.update(dt);
+    this.ankleBreaks.update(dt);
     this.ball.update(dt);
     if (this.debugPassTarget) this.debugPassTarget.update(dt);
     this.hoop.net.update(dt, this.ball);
@@ -234,6 +246,7 @@ ISO.Game = class {
     hi.x = a.x; hi.y = a.y;
     hi.sprint = I.isSprinting();
     if (I.consumePress('shoot')) hi.jump = true;
+    if (I.consumePress('steal')) hi.steal = true;
     hi.handsUp = I.isDown('pass');
   }
 

@@ -50,6 +50,8 @@ ISO.UI = class {
 
     // Possession: who has the ball now, and the quick fade that hides resets.
     this.banner = el('div', 'possession-banner');
+    // ANKLE BREAKER: shown only when the gameplay reports a real major break.
+    this.callout = el('div', 'callout');
     this.fadeEl = el('div', 'possession-fade');
 
     this.controls = el('div', 'controls-bar');
@@ -58,7 +60,7 @@ ISO.UI = class {
     // Small transient notice (e.g. no pass target).
     this.toast = el('div', 'hud-toast');
 
-    container.append(this.fadeEl, this.scoreboard, this.banner, this.meter, this.feedback, this.toast, this.controls);
+    container.append(this.fadeEl, this.scoreboard, this.banner, this.callout, this.meter, this.feedback, this.toast, this.controls);
     this._toastUntil = 0;
 
     this._zonesSet = false;
@@ -104,6 +106,7 @@ ISO.UI = class {
       ['Defend', [
         item(MOVE, 'Move (slide / pressure / retreat)', 'Move', true),
         item(['sprint'], 'Turn & run', 'Run'),
+        item(['steal'], 'Steal (reach)', 'Steal'),
         item(['shoot'], 'Jump / contest', 'Jump'),
         item(['pass'], 'Hold: hands up', 'Hands'),
       ]],
@@ -255,6 +258,21 @@ ISO.UI = class {
     this.feedback.className = 'shot-feedback is-win';
     void this.feedback.offsetWidth;
     this.feedback.classList.add('is-shown');
+  }
+
+  // A steal (from the steal event): who did it decides the color.
+  showSteal(e, localId) {
+    const mine = e.defenderPlayerId === localId;
+    this._showFeedback('STEAL!', e.kind === 'deflection' ? 'POKED AWAY' : 'PICKED', mine ? 'perfect' : 'bad');
+  }
+
+  // ANKLE BREAKER (from the ankleBreak event, major stagger or fall only).
+  showAnkleBreaker(e) {
+    this.callout.textContent = 'ANKLE BREAKER';
+    this.callout.classList.remove('is-shown', 'is-fall');
+    void this.callout.offsetWidth;
+    this.callout.classList.add('is-shown');
+    if (e.reactionLevel >= 3) this.callout.classList.add('is-fall');
   }
 
   // A physical block happened (from the blockOccurred event).

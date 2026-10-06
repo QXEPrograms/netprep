@@ -52,6 +52,15 @@ ISO.PossessionDebug = class {
       lines.push(`REF  gap ${gap.toFixed(2)} m   commit ${(L.attack || 0).toFixed(2)} ${L.level || ''}   plant ${L.plantState || '-'}   dribble ${dr.hand[0].toUpperCase()} phase ${dr.phase.toFixed(2)}`);
       lines.push(`     defender ${d.state}  react ${(d.ai.reactionDelay * 1000).toFixed(0)} ms  facing err ${(Math.abs(DL.defensiveFacingError) * 57.3).toFixed(0)}°  ${DL.mode}  jump ${DL.jumpState}`);
       lines.push(`     shot ${shot}  contest ${d.contest.contestStrength.toFixed(2)}  blocks live ${d.blocks.active ? 'yes' : 'no'}   cam focus (${f.x.toFixed(1)}, ${f.z.toFixed(1)}) yaw ${(cam.yaw * 57.3).toFixed(0)}°`);
+      // Steals / balance / ankle breaks / block window (Step 15B).
+      const bal = d.balance, r = d.reach, rx = DL.reaction, ball = g.ball;
+      const reach = r ? `${r.phase} ${r.side > 0 ? 'R' : 'L'} ${r.t.toFixed(2)}s` : d._reachIdle < ISO.DEFENSE.steal.minInterval ? 'interval' : 'ready';
+      lines.push(`BAL  ${bal.level} ${bal.balance.toFixed(2)}  commit ${bal.commitment.toFixed(2)}  vulnerability ${bal.vulnerability.toFixed(2)}  reaction ${rx ? `L${rx.level} ${(rx.duration - rx.t).toFixed(2)}s left` : '-'}`);
+      lines.push(`     reach ${reach}  exposure ${ISO.StealSystem.exposure(o, d).toFixed(2)}  steal eligible ${g.steals.stealable(o) ? 'yes' : 'no'}  reaches ${d.reachCount}  last ${d.lastReachResult}`);
+      lines.push(`     block eligible ${d.blocks.blockable() ? 'yes' : 'no'}  protected phase ${ball.mode === 'free' && ball.flightKind === 'shot' && ISO.BlockSystem.protectedPhase(ball) ? 'YES' : 'no'}  shot phase ${sh.shotPhase || fi.finishPhase || '-'}`);
+      const ab = g.ankleBreaks.last, lb = d.blocks.lastBlock;
+      lines.push(`LAST reach ${g.steals.last.reach}  steal ${g.steals.last.steal}`);
+      lines.push(`     ankle ${ab ? `${ab.moveType} L${ab.level} sev ${ab.severity} (wrong ${ab.wrongWay} bal ${ab.balance} exit ${ab.exit})` : '-'}  block ${lb ? `${lb.blockType} by ${lb.blockerPlayerId}` : '-'}  possession reason ${s.lastPossessionChangeReason || s.possessionStartReason || '-'}`);
     }
     this.panel.textContent = lines.join('\n');
   }

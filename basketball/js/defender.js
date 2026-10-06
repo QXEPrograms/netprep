@@ -130,8 +130,21 @@ ISO.DefenderController = class {
     // filled each frame by a keyboard source now, a network source later).
     this.control = 'cpu';
     // Plain, serializable input intent for a human/remote defender.
-    this.humanInput = { x: 0, y: 0, sprint: false, jump: false, handsUp: false };
+    this.humanInput = { x: 0, y: 0, sprint: false, jump: false, handsUp: false, steal: false };
     this.lastIntent = null;
+    // Steals / balance / ankle breaks (defense-interactions.js)
+    this.balance = new ISO.DefensiveBalance(this);
+    this.reach = null;                  // { phase: windup|active|recover, t, side (+1 right hand), dir, contacted, won }
+    this._reachIdle = 99;               // s since the last reach ended
+    this.reachCount = 0;
+    this.lastReachResult = '-';
+    this.reactionLevel = 0;             // 0 none, 1 stumble, 2 stagger, 3 fall (while it lasts)
+    this._wasReacting = false;
+    this._tiltV = new THREE.Vector3();
+    this._tiltQ = new THREE.Quaternion();
+    this._yawQ = new THREE.Quaternion();
+    this._up = new THREE.Vector3(0, 1, 0);
+    this._reachT = new THREE.Vector3();
     // Possession transitions: no new intent (CPU or human) — the body just
     // settles in its stance, facing its man.
     this.frozen = false;
@@ -186,6 +199,13 @@ ISO.DefenderController = class {
     const c = this.contest;
     c.isContesting = false; c.contestStrength = 0; c.contestTiming = 0; c.contestHandDistance = Infinity;
     this.blocks.clear();
+    // steal reach, broken balance and the body tilt never carry over
+    this.reach = null; this._reachIdle = 99; this.lastReachResult = '-';
+    L.reaction = null; L.turnScale = 1; this.reactionLevel = 0; this._wasReacting = false;
+    L.acceleration.set(0, 0, 0); L._prevV.set(0, 0, 0);
+    this.balance.reset();
+    this.model.root.rotation.x = 0; this.model.root.rotation.z = 0;
+    ai.wantReach = false;
   }
 
   // Role change: this player stops defending (hands can never block again
@@ -213,6 +233,7 @@ ISO.DefenderController = class {
       intent.jump = false;
       handsUp = false;
       this.humanInput.jump = false;
+      this.humanInput.steal = false;
     } else if (this.control === 'human') {
       this.ai.observe(dt);
       const hi = this.humanInput, opp = this.opponent.locomotion.position;
@@ -220,20 +241,118 @@ ISO.DefenderController = class {
       intent.jump = !!hi.jump;
       hi.jump = false;                                   // an edge: one jump per press
       handsUp = !!hi.handsUp;
+      if (hi.steal) this.requestReach();                 // reach is an edge too
+      hi.steal = false;
     } else {
       this.ai.observe(dt);
       intent = this.ai.update(dt);
       intent.jump = this.ai.wantJump;
       handsUp = this.ai.handsUp >= 0.85;
+      if (this.ai.wantReach) this.requestReach();        // the CPU only ASKS to reach
     }
+    // A reach commits the body: slower feet, slower turning, no jump.
+    const S = ISO.DEFENSE.steal;
+    if (this.control !== 'cpu' || this.frozen) L.speedScale = 1;   // (the CPU brain sets its own each frame)
+    if (this.reach) { L.speedScale *= S.reachSpeedScale; L.turnScale = 0.6; intent.jump = false; } else L.turnScale = 1;
+    if (L.reaction) handsUp = false;
     this.lastIntent = { moveX: +intent.velocity.x.toFixed(3), moveZ: +intent.velocity.z.toFixed(3), sprint: !!intent.allowRun, jump: !!intent.jump, handsUp };
     L.update(dt, intent);
+    this._updateReach(dt);
+    this.balance.update(dt);
+    if (this._wasReacting && !L.reaction) { this.balance.afterReaction(); this.reactionLevel = 0; }
+    this._wasReacting = !!L.reaction;
     // Arms go up on a jump (that's the contest) or when asked; they take time.
     const A = ISO.DEFENSE.arms;
     const want = handsUp || L.jumpState === 'load' || L.jumpState === 'air';
     this.handsUp = want ? 1 : 0;
     const rate = dt / (want ? A.raiseTime : A.lowerTime);
     this.handRaise = Math.max(0, Math.min(1, this.handRaise + (want ? rate : -rate)));
+  }
+
+  // ---- steal reach ------------------------------------------------------------
+
+  // Start a reach at the ball (human key / CPU decision). The hand is picked
+  // from where the ball is relative to the defender's chest.
+  requestReach() {
+    const S = ISO.DEFENSE.steal, L = this.locomotion;
+    if (this.reach || this._reachIdle < S.minInterval || L.reaction || L.jumpState !== 'ground' || this.frozen) return false;
+    const b = this.ball.position, f = L.facing;
+    const rx = -Math.cos(f), rz = Math.sin(f);                  // character right
+    let lat = (b.x - L.position.x) * rx + (b.z - L.position.z) * rz;
+    if (Math.abs(lat) < 0.06) {
+      // ball dead ahead: attack the ball handler's dribble hand (their right is my left, face to face)
+      lat = this.opponent.dribble && this.opponent.dribble.hand === 'left' ? 1 : -1;
+    }
+    const side = lat >= 0 ? 1 : -1;
+    const dir = new THREE.Vector3(b.x - L.position.x, 0, b.z - L.position.z);
+    if (dir.lengthSq() < 1e-6) dir.set(Math.sin(f), 0, Math.cos(f));
+    dir.normalize();
+    this.reach = { phase: 'windup', t: 0, side, dir, contacted: false, won: false };
+    this.reachCount++;
+    if (this.blocks.events) this.blocks.events.emit('stealAttempt', { defenderPlayerId: this.playerId, hand: side > 0 ? 'right' : 'left' });
+    return true;
+  }
+
+  _updateReach(dt) {
+    const S = ISO.DEFENSE.steal, r = this.reach;
+    if (!r) { this._reachIdle += dt; return; }
+    r.t += dt;
+    if (r.phase !== 'recover') {
+      const b = this.ball.position, P = this.locomotion.position;
+      const d = this._reachT.set(b.x - P.x, 0, b.z - P.z);
+      if (d.lengthSq() > 1e-6) r.dir.lerp(d.normalize(), Math.min(1, 12 * dt)).normalize();
+    }
+    if (r.phase === 'windup' && r.t >= S.windup) { r.phase = 'active'; r.t = 0; }
+    else if (r.phase === 'active' && r.t >= S.active) {
+      if (!r.won) {
+        // came up empty (or only touched a protected ball): the weight stays out there
+        this.balance.failedReach(r.dir);
+        if (!r.contacted) this.lastReachResult = 'miss';
+        if (!r.contacted && this.blocks.events) this.blocks.events.emit('reachResult', { defenderPlayerId: this.playerId, result: 'miss' });
+      }
+      r.phase = 'recover'; r.t = 0;
+    } else if (r.phase === 'recover' && r.t >= S.recover) { this.reach = null; this._reachIdle = 0; }
+  }
+
+  // 0..1 how far the reach arm is out (for the pose and the weight shift)
+  get reachExtent() {
+    const S = ISO.DEFENSE.steal, r = this.reach;
+    if (!r) return 0;
+    return r.phase === 'windup' ? 0.55 * r.t / S.windup : r.phase === 'active' ? 1 : Math.max(0, 1 - r.t / S.recover);
+  }
+
+  // ---- balance broken ------------------------------------------------------------
+
+  // level 1 stumble, 2 stagger (ankle break), 3 fall; dir = where the weight was going
+  applyReaction(level, dir) {
+    const A = ISO.DEFENSE.ankleBreak, L = this.locomotion;
+    L.reaction = { level, t: 0, duration: A.duration[level], dir: dir.clone().setY(0).normalize(),
+      carrySpeed: Math.max(1.6, L.speed) * A.carry[level], inputShare: A.inputShare[level] };
+    this.reach = null; this._reachIdle = 0;
+    this.reactionLevel = level;
+    this.balance.balance = Math.min(this.balance.balance, 0.2);
+  }
+
+  // The body tips toward the reach / the lost-balance side, pivoting on the feet.
+  _applyTilt() {
+    const L = this.locomotion, root = this.model.root, tv = this._tiltV.set(0, 0, 0);
+    if (this.reach) tv.addScaledVector(this.reach.dir, ISO.DEFENSE.steal.reachLean * this.reachExtent);
+    const r = L.reaction;
+    if (r) {
+      const A = ISO.DEFENSE.ankleBreak, u = Math.min(1, r.t / r.duration);
+      const ease = (x) => x * x * (3 - 2 * x);
+      let a;
+      if (r.level === 1) a = A.tilt[1] * Math.sin(Math.PI * u);
+      else if (r.level === 2) a = A.tilt[2] * (u < 0.25 ? ease(u / 0.25) : 1 - ease((u - 0.25) / 0.75)) * (1 + 0.18 * Math.sin(u * 19));
+      else a = A.tilt[3] * (u < 0.28 ? ease(u / 0.28) : u < 0.55 ? 1 : 1 - ease((u - 0.55) / 0.45));
+      tv.addScaledVector(r.dir, a);
+    }
+    const ang = tv.length();
+    if (ang < 1e-4) { root.rotation.x = 0; root.rotation.z = 0; return; }
+    const axis = this._reachT.set(tv.z / ang, 0, -tv.x / ang);    // up x dir: the top moves toward dir
+    this._tiltQ.setFromAxisAngle(axis, ang);
+    this._yawQ.setFromAxisAngle(this._up, L.facing);
+    root.quaternion.copy(this._tiltQ).multiply(this._yawQ);
   }
 
   // Soft body contact with the ball handler (call right after the ball
@@ -250,10 +369,11 @@ ISO.DefenderController = class {
   // are drawn when the ball moves).
   updateVisual(dt) {
     this.model.update(dt, this._modelState(), this._pose(dt));
+    this._applyTilt();
     // Hand colliders are live only during a real defensive action: a jump or
     // raised hands. Lowered "active hands" never block.
     const L = this.locomotion;
-    const live = (L.jumpState === 'air' || L.jumpState === 'load' || this.handRaise > 0.5) && L.mode !== 'run';
+    const live = (L.jumpState === 'air' || L.jumpState === 'load' || this.handRaise > 0.5) && L.mode !== 'run' && !L.reaction;
     this.blocks.sync(dt, [live, live]);
     this.blocks.checkHeld(this.opponent);
     this.contest.update();
@@ -332,6 +452,13 @@ ISO.DefenderController = class {
       // running: arms swing free, except shoulder to shoulder with the ball
       // handler (then they stay on targets that keep them out of his chest)
       h.weight = run ? (this._closeToOpponent ? 1 : 0) : 1;
+    }
+    // Steal reach: the reach hand goes at the ball (a little through it); the
+    // arm IK stops at real arm length, so far balls stay out of reach.
+    if (this.reach) {
+      const r = this.reach, h = this.hands.find((x) => x.side === r.side);
+      h.target.lerp(this._reachT.copy(ball).addScaledVector(r.dir, 0.12), Math.min(1, this.reachExtent));
+      h.weight = 1;
     }
     // Keep the hands out of the ball handler's chest when they're right on top of us.
     const om = this.opponent.model;

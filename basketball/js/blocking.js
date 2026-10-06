@@ -93,11 +93,26 @@ ISO.BlockSystem = class {
   }
 
   // Can the ball be blocked right now? A released shot early in its flight,
-  // before it has touched the rim or backboard.
+  // before it has touched the rim or backboard, and not yet in the protected
+  // rim phase (see protectedPhase). The hand still has to physically meet it.
   blockable() {
     const b = this.ball, w = this.world;
     return b.mode === MODES().FREE && b.flightKind === 'shot' && b.freeTime < this.cfg.maxShotAge &&
-      !(w && (w.shotTouchedRim || w.shotTouchedBackboard));
+      !(w && (w.shotTouchedRim || w.shotTouchedBackboard)) && !ISO.BlockSystem.protectedPhase(b);
+  }
+
+  // The shot belongs to the rim (no late swats): coming DOWN inside the rim
+  // area, or already over the cylinder above the rim. Rising balls near the
+  // shooter (and chase-downs before this phase) stay blockable. A dunk is
+  // thrown down at the rim from the start, so it is only protected once it is
+  // securely at / through the rim.
+  static protectedPhase(b) {
+    const K = ISO.DEFENSE.block, H = ISO.CONFIG.hoop, p = b.position;
+    const dx = p.x, dz = p.z - H.centerZ, horiz = Math.hypot(dx, dz), dy = p.y - H.rimHeight;
+    if (b.shotKind === 'dunk') return horiz < K.dunkLockRadius && dy < K.dunkSecureAbove;
+    const dist = Math.hypot(horiz, dy);
+    if (b.velocity.y < 0 && dist < K.protectRadius && dy > -K.protectAboveRim) return true;
+    return horiz < K.cylinderRadius && dy >= 0 && dy < K.cylinderHeight;
   }
 
   // Role change / possession reset: no live hands, no block state.
@@ -136,6 +151,9 @@ ISO.BlockSystem = class {
     const sh = shooter.shooting, fi = shooter.finishing;
     const sys = sh.inReleaseWindow ? sh : fi.inReleaseWindow ? fi : null;
     if (!sys) return false;
+    // a ball already being put down through the rim can't be knocked loose
+    const H = ISO.CONFIG.hoop, K = ISO.DEFENSE.block;
+    if (Math.hypot(b.position.x, b.position.z - H.centerZ) < K.dunkLockRadius && b.position.y > H.rimHeight - 0.1) return false;
     for (const h of this.hands) {
       if (!h.active) continue;
       if (h.cur.distanceTo(b.position) < b.radius + h.radius) {

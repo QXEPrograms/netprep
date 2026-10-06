@@ -31,6 +31,9 @@ ISO.Input = class {
       // CPU offense test patterns (while you defend)
       bot0: ['Digit0'], bot1: ['Digit1'], bot2: ['Digit2'], bot3: ['Digit3'],
       bot4: ['Digit4'], bot5: ['Digit5'], bot6: ['Digit6'], bot7: ['Digit7'], bot8: ['Digit8'],
+      // defense (the same physical key may mean something else on offense:
+      // only the controller of your current role reads it)
+      steal: ['KeyE'],
       // ?scenario: restart the reference scenario
       scenarioReset: ['Enter'],
     };

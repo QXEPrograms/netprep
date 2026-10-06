@@ -303,6 +303,7 @@ ISO.FinishSystem = class {
     this.releaseContest = this.contestProvider ? this.contestProvider(this.finishType) : 0;
     this.releaseVelocity.copy(b.velocity);
     b.setFree(this._p.copy(b.position), this.releaseVelocity, this._tmp.set(0, 0, 0), 'shot');
+    b.shotKind = this.finishType;
     b.holder = null;
     this.releasePosition.copy(b.position);
     if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
@@ -397,6 +398,7 @@ ISO.FinishSystem = class {
     const spin = this._tmp.set(-dz, 0, dx);
     if (spin.lengthSq() > 1e-8) spin.normalize().multiplyScalar(kind === 'dunk' ? 4 : 10);
     this.ball.setFree(pos, vel, spin, 'shot');
+    this.ball.shotKind = kind;
     this.ball.holder = null;
     this.releasePosition.copy(pos);
     if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);

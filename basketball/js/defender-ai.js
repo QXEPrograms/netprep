@@ -28,6 +28,9 @@ ISO.DefenderAI = class {
     this.cfg = ISO.DEFENSE;
     this.rim = new THREE.Vector3(0, 0, H.centerZ);
     this.rng = mulberry32(this.cfg.reaction.seed);
+    this.reachRng = mulberry32((this.cfg.reaction.seed + 7919) >>> 0);   // its own stream: reach decisions never shift the others
+    this.wantReach = false;
+    this._lastReachDecision = -99;
 
     this.state = 'guarding';
     this.stateTime = 0;
@@ -69,7 +72,7 @@ ISO.DefenderAI = class {
   }
 
   // Restart the reaction randomness (reproducible tests).
-  reseed(seed) { this.rng = mulberry32(seed >>> 0); }
+  reseed(seed) { this.rng = mulberry32(seed >>> 0); this.reachRng = mulberry32((seed + 7919) >>> 0); }
 
   // ---- perception ------------------------------------------------------------
 
@@ -262,6 +265,19 @@ ISO.DefenderAI = class {
       this.handsUp = this.freeze > 0 ? 0.9 : 0.35;
     }
     if (state !== 'contest' && state !== 'closeout' && this.freeze <= 0) this.handsUp = Math.min(this.handsUp, 0.5);
+    // Steal: ASK to reach only with a real chance — in front, close, ball
+    // exposed (visible geometry), balanced — one decision per opportunity.
+    this.wantReach = false;
+    const SC = cfg.steal, Dd = this.defender;
+    if ((state === 'guarding' || state === 'shading') && S.hasBall && !shotLive && !S.released && !Dd.reach &&
+        this.time - this._lastReachDecision > SC.cpuMinInterval && Dd.balance.balance > SC.cpuMinBalance) {
+      const b = Dd.ball.position;
+      if (Math.hypot(b.x - D.position.x, b.z - D.position.z) < SC.cpuReachDist &&
+          ISO.StealSystem.exposure(Dd.opponent, Dd) > SC.cpuMinExposure) {
+        this._lastReachDecision = this.time;
+        this.wantReach = this.reachRng() < SC.cpuChance;
+      }
+    }
     this.defender.locomotion.speedScale = this.freeze > 0 ? 0.25 : 1;
     return out;
   }

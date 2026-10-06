@@ -440,6 +440,7 @@ ISO.ShootingSystem = class {
     this.releaseContest = this.contestProvider ? this.contestProvider(this.shotType) : 0;
     this.releaseVelocity.copy(b.velocity);
     b.setFree(this._aim.copy(b.position), this.releaseVelocity, this._tmp.set(0, 0, 0), 'shot');
+    b.shotKind = this.shotType;
     b.holder = null;
     this.releasePosition.copy(b.position);
     if (loco) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
@@ -676,6 +677,7 @@ ISO.ShootingSystem = class {
     if (d > 1e-4) spin.set(-dz / d, 0, dx / d).multiplyScalar(s.backspin);
 
     this.ball.setFree(pos, vel, spin, 'shot');
+    this.ball.shotKind = this.shotType;
     this.ball.holder = null;
     this.releasePosition.copy(pos);
     if (loco) this.releaseFeet.set(loco.position.x, 0, loco.position.z);

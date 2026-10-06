@@ -158,6 +158,98 @@ ISO.DEFENSE = {
     // (what happens after a block is the possession system's: GAMEFLOW.blockResetDelay)
   },
 
+  // ---- steals: a real reach, physical hand/ball contact ---------------------------
+  // The reach is visible (weight shift + an arm extended at the ball) and the
+  // hand collider is swept against the dribbled ball. Contact through the ball
+  // handler's body never counts. Whether a contact is a clean steal, a
+  // deflection or nothing depends on how exposed the ball was (exposure).
+  steal: {
+    windup: 0.05,          // weight shifts, arm starts (no contact yet)
+    active: 0.16,          // the hand can win the ball during this window
+    recover: 0.24,         // arm comes back; locomotion still limited
+    minInterval: 0.12,     // tiny technical gap after a recovery (no cooldown meter)
+    reachSpeedScale: 0.62, // locomotion while reaching / recovering (committed)
+    reachLean: 0.16,       // rad of weight shift toward the ball
+    contactMargin: 0.035,  // m added to hand + ball radii for contact
+    maxBallDist: 1.25,     // reach is pointless beyond this (defender center -> ball, m)
+    occlusionRadius: 0.21, // the ball handler's torso/hips as a vertical cylinder (m)...
+    occlusionMinY: 0.45, occlusionMaxY: 1.7,
+    // exposure (0..1) -> outcome
+    exposureNear: 0.36,    // ball this close to the ball handler's body center = protected (a set dribble)...
+    exposureFar: 0.74,     // ...this far out = fully exposed (pushed ahead, crossing over)
+    moveExposure: 0.3,     // + while the ball crosses between hands (crossover, behind-back, in-and-out)
+    driveExposure: 0.15,   // + on a committed drive (ball pushed ahead)
+    cleanExposure: 0.62,   // contact at or above this (and a balanced defender) = clean steal
+    cleanBalance: 0.45,
+    deflectExposure: 0.3,  // below this a touch is a harmless glance
+    cleanBallSpeed: 3.2,   // m/s the ball pops into the stealer's hands
+    deflectSpeed: 3.6,     // m/s the hand knocks the ball away
+    deflectResolve: 0.38,  // s later the deflection is settled (no loose-ball game):
+    regainRadius: 1.15,    // ball within this of the ball handler (and nearer him) = he keeps dribbling;
+                           // nearer him but out of reach = a quick reset, his team's ball (DEFLECTION)
+    stealResetDelay: 0.55, // s the steal reads before the possession transition
+    failedDrain: 0.32,     // balance lost when a reach comes up empty
+    failedCommit: 0.7,     // and the weight left committed toward the reach side
+    // CPU: asks to reach only with a real chance, never spamming
+    cpuReachDist: 1.0, cpuMinExposure: 0.45, cpuMinBalance: 0.65, cpuMinInterval: 1.4, cpuChance: 0.35,
+  },
+
+  // ---- balance: how stable the defender is right now (0 broken .. 1 set) ----
+  balance: {
+    commitVel: 0.11,       // commitment (0..1) per m/s of velocity...
+    commitAccel: 0.022,    // ...and per m/s^2 of acceleration
+    commitRise: 9,         // 1/s toward a bigger commitment (weight goes quickly)...
+    commitFall: 2.6,       // ...and back (it takes a moment to get it back)
+    drainSpeed: 0.09,      // per s for each m/s above freeSpeed
+    freeSpeed: 2.2,
+    drainRun: 0.2,         // per s while turned and running
+    drainPlant: 0.9,       // per s while planting a reversal
+    drainFacing: 0.35,     // per s while the chest is far off the ball handler...
+    facingError: 0.7,      // ...(rad)
+    drainAccel: 0.012,     // per s per m/s^2 of hard acceleration (sudden corrections)
+    recoverSet: 0.95,      // per s when set: slow, square, not planting
+    recoverMoving: 0.32,   // per s otherwise
+    setSpeed: 1.6,
+    // labels: BALANCED >= slight, SLIGHTLY COMMITTED >= heavy, HEAVILY COMMITTED >= broken, else BROKEN
+    slight: 0.75, heavy: 0.5, broken: 0.25,
+  },
+
+  // ---- ankle breaks: an offensive counter against committed weight ----------
+  // Evaluated when the ball handler counters (a dribble move ends, a hard cut
+  // pushes off, a step-back lands): over `window` seconds it measures where they
+  // actually went. Severity = how far the defender's weight/velocity points the
+  // OTHER way x how unbalanced they were x how hard the offense exits x spacing.
+  // No random numbers: the same situation gives the same result.
+  ankleBreak: {
+    window: 0.22,
+    exitSpeed: 4.0,        // exit speed along the new direction that counts as full
+    spacingNear: 0.55, spacingBest: 0.8, spacingFar: 2.2, spacingMax: 3.0,
+    moveFactor: { crossover: 1.0, inAndOut: 1.0, behindBack: 0.95, hesitation: 0.9, spin: 0.85, stepBack: 0.8, cut: 0.8 },
+    reachBonus: 0.18,      // countering away from a reach that is still recovering
+    stumble: 0.3, stagger: 0.52, fall: 0.86,
+    fallMaxBalance: 0.4,   // a fall also needs a stance already gone...
+    fallMinWrongWay: 0.9,  // ...weight clearly the wrong way...
+    fallMinExit: 0.85,     // ...and a hard exit
+    duration: { 1: 0.3, 2: 0.66, 3: 1.05 },
+    speedScale: { 1: 0.45, 2: 0.18, 3: 0 },   // locomotion during the reaction
+    inputShare: { 1: 0.4, 2: 0.12, 3: 0 },    // how much the brain/player still steers
+    carry: { 1: 0.55, 2: 0.8, 3: 0.6 },       // the committed momentum carried into it
+    tilt: { 1: 0.2, 2: 0.42, 3: 1.32 },       // rad the body tips toward the lost-balance side
+    recoveredBalance: 0.6,
+  },
+
+  // ---- block eligibility (the physical hand/ball contact decides the rest) ----
+  // A released shot can be blocked early in its flight; once it is coming down
+  // into the rim area it belongs to the rim (no late arcade swats).
+  block: {
+    protectRadius: 1.9,    // m from the rim center: a DESCENDING ball inside this is protected
+    protectAboveRim: 0.25, // ...when it is no lower than this below the rim plane
+    cylinderRadius: 0.5,   // over the rim: inside this horizontally and above the rim = protected
+    cylinderHeight: 1.2,
+    dunkLockRadius: 0.4,   // a ball being dunked this close over the rim can't be knocked loose...
+    dunkSecureAbove: 0.3,  // ...and once free it is the rim's within this height above it
+  },
+
   // ---- contest (deterministic from player state) --------------------------------
   contest: {
     nearDist: 0.7,         // full distance factor at or inside this (defender body -> ball)

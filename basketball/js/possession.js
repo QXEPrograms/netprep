@@ -36,9 +36,10 @@ ISO.POSSESSION_REASON = {
   MAKE: 'MAKE',                 // retained (make-it-take-it)
   MISS: 'MISS',
   BLOCK: 'BLOCK',
-  STEAL: 'STEAL',               // (future)
+  STEAL: 'STEAL',               // a clean steal or a deflection the defense came up with
   OUT_OF_BOUNDS: 'OUT_OF_BOUNDS', // (future)
   VIOLATION: 'VIOLATION',       // (future)
+  DEFLECTION: 'DEFLECTION',     // a poked ball got away, but the offense was nearer: their ball again
   DEAD_BALL: 'DEAD_BALL',       // safety net: a free ball nobody accounts for
   DEV: 'DEV',                   // developer reset
 };
@@ -182,7 +183,8 @@ ISO.PossessionSystem = class {
   // shot or a pass (nothing in the game produces this today).
   _watchDeadBall(dt) {
     const b = this.ball;
-    const loose = b.mode === ISO.Basketball.MODES.FREE && !this.scoring.pending && !(b.flightKind === 'pass' && (b.returnPass || b.freeTime < 2));
+    const loose = b.mode === ISO.Basketball.MODES.FREE && !this.scoring.pending && !(b.flightKind === 'pass' && (b.returnPass || b.freeTime < 2)) &&
+      !((b.flightKind === 'deflection' || b.flightKind === 'steal') && b.freeTime < 2);   // the steal system settles those
     this._deadT = loose ? this._deadT + dt : 0;
     if (this._deadT > this.cfg.deadBallTimeout) { this._deadT = 0; this.endPossession(this.offenseTeamId, R.DEAD_BALL); }
   }

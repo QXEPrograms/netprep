@@ -85,6 +85,7 @@ ISO.Basketball = class {
   setFree(pos, vel, spin, kind = 'loose') {
     this.mode = ISO.Basketball.MODES.FREE;
     this.flightKind = kind;
+    this.shotKind = null;      // set by the shooter on a shot release ('jumpshot', 'layup', 'floater', 'dunk')
     this.blockedAt = null;
     this.blockedBy = null;
     this.position.copy(pos);

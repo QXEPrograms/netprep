@@ -7,7 +7,8 @@
 // defense (at several spots, facings and defensive states, across repeated
 // possession changes), make-it-take-it / miss / blocked miss possession,
 // 1s and 2s scoring, first to 11 and the new game, role swaps (locomotion,
-// ball owner, input routing, HUD, state cleanup).
+// ball owner, input routing, HUD, state cleanup), and the defensive
+// interactions: reach / steal, ankle breaks and recovery, the rim's phase.
 (function () {
 if (!/[?&]selftest\b/.test(window.location.search)) return;
 
@@ -178,9 +179,90 @@ ISO.SelfTest = class {
     this.live();
   }
 
+  // Step 15B: reach / steal, balance + ankle breaks, the protected rim phase.
+  // I defend team B's ball handler, who is driven through their own virtual
+  // input (same path the CPU uses).
+  interactions() {
+    const g = this.g, P = this.P, R = g.roster, V3 = (x, z) => new THREE.Vector3(x, 0, z);
+    const setup = () => {
+      P.devReset('B'); this.live();
+      const h = g.handler, me = this.me;
+      h.offense.locomotion.resetMotion(V3(0, 9.5), Math.PI); h.offense._updateBallHandling(0);
+      me.defense.reset(V3(0, 8.2)); this.step(3);
+      h.virtual.axes = { x: 0, y: 0 }; h.virtual.sprint = false;
+      return { h, V: h.virtual, d: me.defense };
+    };
+    const toAxes = (x, z) => ISO.ScreenInput.fromWorld(x, z, g.cameraController.camera);
+    const evs = []; g.events.on('ankleBreak', (e) => evs.push(e)); g.events.on('steal', (e) => evs.push(e));
+    const callout = () => g.ui.callout.classList.contains('is-shown');
+    // HUD: the steal action is listed on defense with its real key
+    let { h, V, d } = setup();
+    const key = ISO.Input.keyLabel(g.input.bindings.steal[0]);
+    this.check('defense HUD lists Steal with its bound key', g.ui.controlsRole === 'defense' && /steal/i.test(g.ui.controls.textContent) && g.ui.controls.textContent.includes(key), `key ${key}`);
+    // a press starts a visible reach that recovers on its own
+    this.keyDown('KeyE'); this.step(1); this.keyUp('KeyE');
+    const started = !!d.reach;
+    let peak = 0; for (let i = 0; i < 40 && d.reach; i++) { this.step(); peak = Math.max(peak, d.reachExtent); }
+    this.check('steal key: visible reach, then recovery', started && peak > 0.6 && !d.reach, `extent ${peak.toFixed(2)}, ${d.reach ? d.reach.phase : 'recovered'}`);
+    // spamming the key does not chain reaches
+    ({ h, V, d } = setup());
+    const n0 = d.reachCount;
+    for (let i = 0; i < 60; i++) { if (i % 2 === 0) this.keyDown('KeyE'); else this.keyUp('KeyE'); this.step(); }
+    this.keyUp('KeyE');
+    this.check('steal spam: at most 2 reaches in 1 s', d.reachCount - n0 <= 2 && d.reachCount - n0 >= 1, `${d.reachCount - n0} reaches`);
+    // no stealing through the ball handler's body: reach from directly behind them
+    ({ h, V, d } = setup());
+    evs.length = 0;
+    d.reset(V3(0, 10.25)); this.step(3);
+    for (let i = 0; i < 40; i++) { if (i === 0) this.keyDown('KeyE'); if (i === 1) this.keyUp('KeyE'); this.step(); }
+    this.check('no steal through the torso', !evs.some((e) => e.type === 'steal') && P.offenseTeamId === 'B' && g.ball.holder === h.offense, d.lastReachResult);
+    // balanced defender + crossover: no ankle break
+    ({ h, V, d } = setup());
+    evs.length = 0; g.ui.callout.classList.remove('is-shown');
+    for (let f = 0; f < 90; f++) {
+      if (f < 30) V.axes = toAxes(1, 0); if (f === 30) V.press('crossover'); if (f >= 36) { V.axes = toAxes(-1, -0.6); V.sprint = true; }
+      this.step();
+    }
+    V.axes = { x: 0, y: 0 }; V.sprint = false;
+    this.check('balanced defender + crossover: no ankle break', !evs.some((e) => e.type === 'ankleBreak') && !callout(), g.ankleBreaks.last ? `sev ${g.ankleBreaks.last.severity}` : 'no eval');
+    // sprinting the wrong way + crossover: stagger, ANKLE BREAKER, offense keeps the ball, defender gets up by itself
+    ({ h, V, d } = setup());
+    evs.length = 0; g.ui.callout.classList.remove('is-shown');
+    let shown = false, lvl = 0, hs = 0;
+    for (let f = 0; f < 90; f++) {
+      if (f < 30) V.axes = toAxes(1, 0); if (f === 30) V.press('crossover'); if (f >= 36) { V.axes = toAxes(-1, -0.6); V.sprint = true; }
+      if (f === 0) { this.keyDown('KeyD'); this.keyDown('ShiftLeft'); } if (f === 44) { this.keyUp('KeyD'); this.keyUp('ShiftLeft'); }
+      this.step();
+      if (d.locomotion.reaction) { lvl = Math.max(lvl, d.locomotion.reaction.level); hs = Math.max(hs, h.offense.locomotion.speed); }
+      shown = shown || callout();
+    }
+    V.axes = { x: 0, y: 0 }; V.sprint = false;
+    const ab = evs.find((e) => e.type === 'ankleBreak');
+    this.check('wrong-way commit + crossover: ANKLE BREAKER', ab && ab.reactionLevel >= 2 && lvl >= 2 && shown, ab ? `L${ab.reactionLevel} sev ${ab.severity}` : 'none');
+    this.check('offense keeps control through the ankle break', g.ball.holder === h.offense && P.offenseTeamId === 'B' && hs > 3, `speed ${hs.toFixed(1)}`);
+    this.until(() => !d.locomotion.reaction, 120); this.step(10);
+    this.check('defender recovers automatically', !d.locomotion.reaction && d.locomotion.mode !== 'run' && Math.abs(d.model.root.rotation.x) < 1e-3, d.locomotion.mode);
+    // the rim owns a descending shot near it (no late swats); a rising ball is blockable
+    const PP = (p, v, shotKind = 'jumpshot') => ISO.BlockSystem.protectedPhase({ position: new THREE.Vector3(...p), velocity: new THREE.Vector3(...v), shotKind });
+    const H = ISO.CONFIG.hoop;
+    this.check('rim phase: descending near the rim is protected', PP([0.3, H.rimHeight + 0.4, H.centerZ + 0.9], [0, -3, -1]) && PP([0, H.rimHeight + 0.3, H.centerZ], [0, 2, 0]), '');
+    this.check('rim phase: rising / away from the rim is blockable', !PP([0, 2.9, H.centerZ + 5], [0, 4, -5]) && !PP([0.2, H.rimHeight - 0.2, H.centerZ + 1.2], [0, 3, -2]), '');
+    this.check('rim phase: a dunk is blockable until it is at the rim', !PP([0, H.rimHeight + 0.5, H.centerZ + 0.6], [0, -3, -1], 'dunk') && PP([0, H.rimHeight + 0.1, H.centerZ + 0.2], [0, -3, 0], 'dunk'), '');
+    // a steal hands the ball over through the possession system: roles, HUD, camera, input follow
+    ({ h, V, d } = setup());
+    g.steals._award(this.me, h.offense, 'clean', ISO.DEFENSE.steal.stealResetDelay, { defenderPlayerId: this.me.id });
+    this.until(() => P.state === 'POSSESSION_START', 300);
+    this.check('steal: possession to the stealing team (STEAL)', P.offenseTeamId === this.me.teamId && P.possessionStartReason === 'STEAL', `${P.offenseTeamId} ${P.possessionStartReason}`);
+    this.roles('after steal');
+    this.live();
+    this.directions('offense after steal', { reset: () => this.place(0, 9.5, 2.6) });
+  }
+
   run() {
     const g = this.g, P = this.P, rules = ISO.GAMEFLOW.rules, target = rules.targetScore;
     this.bot(false);
+    const cpuChance = ISO.DEFENSE.steal.cpuChance;
+    ISO.DEFENSE.steal.cpuChance = 0;   // a CPU poke mid-measurement would reset the possession under the test
     rules.targetScore = 999;           // shots pile up while retrying; the 11 test sets scores itself
     const other = (t) => g.roster.otherTeam(t);
 
@@ -211,8 +293,8 @@ ISO.SelfTest = class {
       this.keyUp('KeyS');
       this.check(`contact: defender into ball handler #${k + 1}`, minGap > 0.45, `closest ${minGap.toFixed(2)} m`);
       // offensive keys pressed while defending must not fire later
-      this.keyDown('KeyE'); this.keyDown('KeyQ'); this.keyDown('KeyZ'); this.step(2);
-      this.keyUp('KeyE'); this.keyUp('KeyQ'); this.keyUp('KeyZ');
+      this.keyDown('KeyC'); this.keyDown('KeyQ'); this.keyDown('KeyR'); this.step(2);
+      this.keyUp('KeyC'); this.keyUp('KeyQ'); this.keyUp('KeyR');
       // CPU misses -> I am back on offense
       s = this.shoot((r) => !r.made, { offset: 0.13 });
       this.afterResult(`CPU miss #${k + 1}`, s.r, s.team, other(s.team), s.r && s.r.wasBlocked ? 'BLOCK' : 'MISS');
@@ -268,7 +350,11 @@ ISO.SelfTest = class {
     this.live();
     this.directions('defense in game 2', { reset: () => this.place(0, 8.1, 2.6) });
 
+    // ---- 5. steals, balance, ankle breaks, rim protection --------------------------
+    this.interactions();
+
     rules.targetScore = target;
+    ISO.DEFENSE.steal.cpuChance = cpuChance;
     this.releaseAll();
     this.bot(true);
     return this.results;
