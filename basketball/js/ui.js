@@ -7,6 +7,7 @@ ISO.UI = class {
     this.role = opts.role || 'offense';
     this.teams = opts.teams || null;
     this.roster = opts.roster || null;
+    this.bindings = opts.bindings || null;     // the live Input.bindings (labels follow rebinding)
 
     // Shot meter: a vertical bar beside the shooter with marked timing zones.
     this.meter = el('div', 'shot-meter');
@@ -83,40 +84,49 @@ ISO.UI = class {
     this._buildControls(role);
   }
 
+  get controlsRole() { return this.controls.dataset.role; }
+
   // Controls guide along the bottom edge, grouped by what the keys do.
   // [keys, label, alternate keys, short label for narrow screens]
   _buildControls(role) {
     this.controls.textContent = '';
-    // Controls depend on your role: on defense the same keys mean different things.
+    this.controls.dataset.role = role;
+    // What YOUR player can do right now (offense or defense), with the keys read
+    // from the same bindings the input uses (Input.bindings). Only actions that
+    // do something are listed: Pass needs a target (the ?debug catch target),
+    // and the CPU-offense test keys are a ?debug aid.
+    const B = this.bindings || {};
+    const dbg = ISO.CONFIG.debugPhysics;
+    const keys = (actions, which = 0) => actions.map((a) => (B[a] || [])[which]).filter(Boolean).map(ISO.Input.keyLabel);
+    const item = (actions, label, short, withAlt = false) => [keys(actions), label, withAlt ? keys(actions, 1) : null, short];
+    const MOVE = ['up', 'left', 'down', 'right'];
     const GROUPS = role === 'defense' ? [
       ['Defend', [
-        [['W', 'A', 'S', 'D'], 'Pressure / slide / give ground', ['↑', '←', '↓', '→'], 'Move'],
-        [['Shift'], 'Turn & run', null, 'Run'],
-        [['Space'], 'Jump / contest', null, 'Jump'],
-        [['F'], 'Hold: hands up', null, 'Hands'],
+        item(MOVE, 'Move (slide / pressure / retreat)', 'Move', true),
+        item(['sprint'], 'Turn & run', 'Run'),
+        item(['shoot'], 'Jump / contest', 'Jump'),
+        item(['pass'], 'Hold: hands up', 'Hands'),
       ]],
-      ['Test offense', [
-        [['1'], 'Jumper', null, 'Jumper'], [['2'], 'Pull-up', null, 'Pull-up'], [['3'], 'Step-back', null, 'Step'],
-        [['4'], 'Side-step', null, 'Side'], [['5'], 'Drive', null, 'Drive'], [['6'], 'Floater', null, 'Float'],
-        [['7'], 'Pump fake', null, 'Fake'], [['0'], 'Stand', null, 'Stand'], [['8'], 'Mix', null, 'Mix'],
-      ]],
-    ] : [
+    ].concat(dbg ? [['CPU offense (test)', [
+      item(['bot1'], 'Jumper', 'Jumper'), item(['bot2'], 'Pull-up', 'Pull-up'), item(['bot3'], 'Step-back', 'Step'),
+      item(['bot4'], 'Side-step', 'Side'), item(['bot5'], 'Drive', 'Drive'), item(['bot6'], 'Floater', 'Float'),
+      item(['bot7'], 'Pump fake', 'Fake'), item(['bot0'], 'Stand', 'Stand'), item(['bot8'], 'Mix', 'Mix'),
+    ]]] : []) : [
       ['Move', [
-        [['W', 'A', 'S', 'D'], 'Move', ['↑', '←', '↓', '→'], 'Move'],
-        [['Shift'], 'Sprint', null, 'Sprint'],
+        item(MOVE, 'Move', 'Move', true),
+        item(['sprint'], 'Sprint', 'Sprint'),
       ]],
       ['Handle', [
-        [['E'], 'Crossover', null, 'Cross'],
-        [['Z', 'X'], 'Spin L / R', null, 'Spin'],
-        [['C'], 'Hesitation', null, 'Hesi'],
-        [['V'], 'Behind back', null, 'BTB'],
-        [['R'], 'In & out', null, 'In-out'],
-        [['Q'], 'Step back', null, 'Step'],
+        item(['crossover'], 'Crossover', 'Cross'),
+        item(['spinLeft', 'spinRight'], 'Spin L / R', 'Spin'),
+        item(['hesitation'], 'Hesitation', 'Hesi'),
+        item(['behindBack'], 'Behind back', 'BTB'),
+        item(['inAndOut'], 'In & out', 'In-out'),
+        item(['stepBack'], 'Step back', 'Step'),
       ]],
       ['Score', [
-        [['Space'], 'Tap fake · Hold shoot · Drive to finish', null, 'Fake/Shoot/Finish'],
-        [['F'], 'Pass', null, 'Pass'],
-      ]],
+        item(['shoot'], 'Tap fake · Hold shoot · Drive to finish', 'Fake/Shoot/Finish'),
+      ].concat(dbg ? [item(['pass'], 'Pass (debug target)', 'Pass')] : [])],
     ];
     for (const [title, items] of GROUPS) {
       const group = el('div', 'controls-group');
@@ -127,7 +137,7 @@ ISO.UI = class {
         const item = el('div', 'controls-bar__item');
         const caps = el('span', 'controls-bar__keys');
         keys.forEach((k) => { const c = el('kbd', 'keycap' + (k.length > 1 ? ' keycap--wide' : '')); c.textContent = k; caps.append(c); });
-        if (alt) {
+        if (alt && alt.length) {
           const or = el('span', 'controls-bar__or'); or.textContent = '/'; caps.append(or);
           alt.forEach((k) => { const c = el('kbd', 'keycap keycap--alt'); c.textContent = k; caps.append(c); });
         }

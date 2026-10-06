@@ -251,57 +251,29 @@ ISO.DefensiveLocomotion = class {
   }
 };
 
-// Turns raw movement input into a defensive intention (for a human defender).
-// With the 'opponent' frame: up = pressure the ball handler, down = give ground
-// toward the basket, left/right = slide around the ball handler at the same
-// distance (left/right in screen terms). Facing is always the assist's job.
+// DefenseInputMapper: a human (or remote) defender's keys -> intent.
+// Same convention as the offense (ISO.ScreenInput): the keys ask for a SCREEN
+// direction of travel, whatever the defender is facing. The locomotion then
+// decides how that travel looks relative to the chest — lateral = slide,
+// toward the ball handler = pressure step, away = retreat, and with Shift
+// (hard recovery) turn and run — while the facing assist keeps the chest on
+// the ball handler. Facing never changes what a key means.
 ISO.DefenseInputMapper = class {
   constructor() {
-    this.holdDist = null;
-    this._r = new THREE.Vector3();
-    this._t = new THREE.Vector3();
     this._out = new THREE.Vector3();
-    this._sr = new THREE.Vector3();
-    this._sf = new THREE.Vector3();
+    this.lastTravel = new THREE.Vector3();   // debug: the requested world travel direction
   }
 
-  // axes: {x: right, y: up} (-1..1). camera: for screen orientation.
+  // axes: {x: right, y: up} (-1..1). camera: the CURRENT camera (its basis).
   // Returns an intent for DefensiveLocomotion.
   map(axes, camera, loco, opponentPos, basket, sprint = false) {
-    const D = ISO.DEFENSE, s = loco.settings;
-    camera.getWorldDirection(this._sf); this._sf.y = 0; this._sf.normalize();
-    this._sr.set(-this._sf.z, 0, this._sf.x);           // screen right on the ground
-    const out = this._out.set(0, 0, 0);
-    const intent = { velocity: out, faceTarget: opponentPos, allowRun: sprint };
-    if (D.humanInputFrame === 'screen') {
-      out.addScaledVector(this._sf, axes.y).addScaledVector(this._sr, axes.x);
-      if (out.lengthSq() > 1) out.normalize();
-      out.multiplyScalar(sprint ? s.runSpeed : s.slideSpeed);
-      return intent;
-    }
-    const r = this._r.set(opponentPos.x - loco.position.x, 0, opponentPos.z - loco.position.z);
-    const dist = r.length();
-    if (dist < 1e-3) r.set(Math.sin(loco.facing), 0, Math.cos(loco.facing)); else r.divideScalar(dist);
-    const t = this._t.set(-r.z, 0, r.x);
-    if (t.dot(this._sr) < 0) t.negate();                  // +x input = screen right
-    // lateral: slide around the ball handler, holding the distance it started at
-    if (Math.abs(axes.x) > 0.1 && Math.abs(axes.y) < 0.1) {
-      if (this.holdDist === null) this.holdDist = dist;
-      out.addScaledVector(t, axes.x * s.slideSpeed);
-      out.addScaledVector(r, Math.max(-2, Math.min(2, (dist - this.holdDist) * 3)));
-    } else {
-      this.holdDist = null;
-      out.addScaledVector(t, axes.x * s.slideSpeed);
-    }
-    // pressure: ease off as the bodies meet (no running through the ball handler)
-    if (axes.y > 0) out.addScaledVector(r, axes.y * s.forwardSpeed * Math.max(0, Math.min(1, (dist - 0.68) / 0.45)));
-    else if (axes.y < 0) {
-      const b = D.humanBackToBasket;
-      const back = new THREE.Vector3(basket.x - loco.position.x, 0, basket.z - loco.position.z).normalize()
-        .multiplyScalar(b).addScaledVector(r, -(1 - b)).normalize();
-      out.addScaledVector(back, -axes.y * s.backSpeed);
-    }
-    return intent;
+    const s = loco.settings;
+    const out = ISO.ScreenInput.toWorld(axes, camera, this._out);
+    this.lastTravel.copy(out);
+    // ask for the most this effort allows; DefensiveLocomotion caps it by
+    // direction (slide / pressure / retreat speeds) or runs when allowed
+    out.multiplyScalar(sprint ? s.runSpeed : s.slideSpeed);
+    return { velocity: out, faceTarget: opponentPos, allowRun: !!sprint };
   }
 };
 

@@ -1,0 +1,293 @@
+// Self-test (?selftest): permanent regression checks for the 1v1 loop, run
+// in the real game through the real input path (keyboard state, possession,
+// roles, camera). Results go to an on-screen panel and window.__SELFTEST;
+// tests/run-selftest.js runs it headless.
+//
+// Covers: WASD + diagonals mean the same SCREEN direction on offense and on
+// defense (at several spots, facings and defensive states, across repeated
+// possession changes), make-it-take-it / miss / blocked miss possession,
+// 1s and 2s scoring, first to 11 and the new game, role swaps (locomotion,
+// ball owner, input routing, HUD, state cleanup).
+(function () {
+if (!/[?&]selftest\b/.test(window.location.search)) return;
+
+ISO.SelfTest = class {
+  constructor(game) {
+    this.g = game;
+    this.results = [];
+    this.frame = 0;
+  }
+
+  // ---- plumbing ----------------------------------------------------------------
+  step(n = 1) { for (let i = 0; i < n; i++) { this.g.step(1 / 60); this.frame++; } }
+  until(cond, max = 1200) { for (let i = 0; i < max; i++) { if (cond()) return true; this.step(); } return cond(); }
+  live() { return this.until(() => this.g.possession.state === 'LIVE', 600); }
+  check(name, ok, info = '') { this.results.push({ name, ok: !!ok, info }); return ok; }
+  get P() { return this.g.possession; }
+  get me() { return this.g.localPlayer; }
+  keyDown(code) { const I = this.g.input; if (!I.keys.has(code)) I.presses.add(code); I.keys.add(code); }
+  keyUp(code) { const I = this.g.input; I.keys.delete(code); I.upTime[code] = performance.now(); }
+  releaseAll() { const I = this.g.input; I.keys.clear(); I.presses.clear(); }
+  bot(on) {
+    for (const p of this.g.roster.players) if (p.controlSource === ISO.CONTROL.CPU) {
+      if (!on && p.bot) { p._stBot = p.bot; p.bot = null; }
+      if (on && p._stBot) { p.bot = p._stBot; p._stBot = null; }
+    }
+  }
+  // put the local player's current body (and the matchup) at a spot
+  place(x, z, gap = 1.4, side = 0) {
+    const g = this.g, H = ISO.CONFIG.hoop, h = g.handler, d = g.defenderEntity;
+    const hp = new THREE.Vector3(x, 0, z);
+    if (h === this.me || !d) {
+      h.offense.locomotion.resetMotion(hp, Math.atan2(-x, H.centerZ - z));
+      h.offense._updateBallHandling(0);
+      if (d) { const u = new THREE.Vector3(-x, 0, H.centerZ - z).normalize(); d.defense.reset(hp.clone().addScaledVector(u, gap).add(new THREE.Vector3(-u.z * side, 0, u.x * side))); }
+    } else {
+      // I am the defender at (x, z); the ball handler stands `gap` away from me, away from the rim
+      const dp = hp, u = new THREE.Vector3(x, 0, z - H.centerZ).normalize();
+      const op = dp.clone().addScaledVector(u, gap).add(new THREE.Vector3(-u.z * side, 0, u.x * side));
+      h.offense.locomotion.resetMotion(op, Math.atan2(-op.x, H.centerZ - op.z));
+      h.offense._updateBallHandling(0);
+      d.defense.reset(dp);
+    }
+    this.step(4);
+  }
+
+  // The ball handler at (x, z), their defender `gap` toward the rim (shots).
+  placeHandler(x, z, gap) {
+    const g = this.g, H = ISO.CONFIG.hoop, h = g.handler, d = g.defenderEntity;
+    const hp = new THREE.Vector3(x, 0, z);
+    h.offense.locomotion.resetMotion(hp, Math.atan2(-x, H.centerZ - z));
+    h.offense._updateBallHandling(0);
+    if (d) { const u = new THREE.Vector3(-x, 0, H.centerZ - z).normalize(); d.defense.reset(hp.clone().addScaledVector(u, gap)); }
+    this.step(4);
+  }
+
+  // Hold keys for `frames` and measure where the body went ON SCREEN (both
+  // points through the same, current camera — an independent check of the
+  // camera-relative convention).
+  screenMove(codes, frames = 20, opts = {}) {
+    const g = this.g, A = this.me.active, cam = g.cameraController.camera;
+    const p0 = A.position.clone();
+    if (opts.sprint) this.keyDown('ShiftLeft');
+    if (opts.handsUp) this.keyDown('KeyF');
+    codes.forEach((c) => this.keyDown(c));
+    this.step(frames);
+    codes.forEach((c) => this.keyUp(c));
+    if (opts.sprint) this.keyUp('ShiftLeft');
+    if (opts.handsUp) this.keyUp('KeyF');
+    const p1 = A.position.clone();
+    const a = p0.project(cam), b = p1.project(cam);
+    return { sx: b.x - a.x, sy: b.y - a.y, dist: A.position.distanceTo(p0) };
+  }
+
+  // Each key combo must move the body in that screen direction (within 40°).
+  directions(tag, opts = {}) {
+    const combos = { W: [0, 1], A: [-1, 0], S: [0, -1], D: [1, 0], WA: [-1, 1], WD: [1, 1], SA: [-1, -1], SD: [1, -1] };
+    const codes = { W: 'KeyW', A: 'KeyA', S: 'KeyS', D: 'KeyD' };
+    let worst = 0, bad = [];
+    for (const [k, [ex, ey]] of Object.entries(combos)) {
+      if (opts.reset) opts.reset();
+      const m = this.screenMove(k.split('').map((c) => codes[c]), opts.frames || 18, opts);
+      const ang = Math.abs(Math.atan2(ex * m.sy - ey * m.sx, ex * m.sx + ey * m.sy)) * 57.3;
+      worst = Math.max(worst, ang);
+      if (ang > 40 || m.dist < 0.15) bad.push(`${k}:${ang.toFixed(0)}°/${m.dist.toFixed(2)}m`);
+      this.step(12);
+    }
+    this.check(`directions ${tag}`, bad.length === 0, bad.length ? 'off: ' + bad.join(' ') : `worst ${worst.toFixed(0)}°`);
+  }
+
+  // Everything that must be true right after a possession (re)start.
+  roles(tag) {
+    const g = this.g, P = this.P, R = g.roster, err = [];
+    const h = g.handler, d = g.defenderEntity, me = this.me;
+    for (const p of R.players) {
+      const want = p.teamId === P.offenseTeamId ? 'offense' : 'defense';
+      if (p.role !== want) err.push(`${p.id} role ${p.role}`);
+    }
+    if (g.ball.ownerPlayerId !== h.id || g.ball.holder !== h.offense) err.push('ball owner');
+    if (!(h.offense.locomotion instanceof ISO.OffensiveLocomotion) || h.active !== h.offense) err.push('offense controller');
+    if (d && (!(d.defense.locomotion instanceof ISO.DefensiveLocomotion) || d.active !== d.defense)) err.push('defense controller');
+    if (d && (d.assignmentId !== h.id || d.defense.opponent !== h.offense || h.offense.locomotion.matchup !== d.defense)) err.push('matchup');
+    const role = me.teamId === P.offenseTeamId ? 'offense' : 'defense';
+    if (g.humanRole !== role) err.push('humanRole');
+    if (g.ui.controlsRole !== role) err.push(`HUD ${g.ui.controlsRole}`);
+    if (role === 'offense' && me.offense.input.source !== g.input) err.push('keyboard not on my offense');
+    if (role === 'defense' && me.defense.control !== 'human') err.push('my defense not human-controlled');
+    if (me.id !== 'P1') err.push('local identity changed');
+    // nothing left over from the previous role / possession
+    for (const p of R.players) {
+      const o = p.offense, s = o.shooting, f = o.finishing;
+      if (s.busy || s.shotReleased || f.busy || o.passing.isPassing || o.stepBack.isSteppingBack || o.dribble.currentMove) err.push(`${p.id} offense state`);
+      if (o.offense.offensiveFatigue > 0.001) err.push(`${p.id} fatigue`);
+      if (p.defense) {
+        const L = p.defense.locomotion;
+        if (L.jumpState !== 'ground' || L.jumpHeight > 0 || p.defense.handRaise > 0 || p.defense.blocks.active) err.push(`${p.id} defense state`);
+      }
+    }
+    if (g.ball.mode !== 'controlled' || g.ball.blockedBy || g.scoring.pending) err.push('ball/shot state');
+    // the camera keeps looking toward the basket whoever has the ball (no flip)
+    const cam = g.cameraController.camera, f = cam.getWorldDirection(new THREE.Vector3());
+    const toRim = new THREE.Vector3(0, 0, ISO.CONFIG.hoop.centerZ).sub(cam.position).setY(0).normalize();
+    if (f.setY(0).normalize().dot(toRim) < 0.8) err.push('camera not facing the basket');
+    return this.check(`roles ${tag}`, err.length === 0, err.join(', ') || `${P.offenseTeamId} ball, you ${role}`);
+  }
+
+  // Take a shot with the current ball handler (offset from the green release),
+  // retrying seeds until the wanted result (all physical). Returns the result.
+  shoot(want, { x = 0, z = 6.6, offset = 0, jumpAt = null } = {}) {
+    const g = this.g, P = this.P;
+    for (let seed = 1; seed < 80; seed++) {
+      const team = P.offenseTeamId;
+      this.live();
+      const h = g.handler, d = g.defenderEntity;
+      this.placeHandler(x, z, jumpAt !== null ? 0.75 : 5.5);
+      if (d && jumpAt === null) d.defense.reset(new THREE.Vector3(6.5, 0, 12.5));
+      h.offense.shooting.setSeed(seed * 7919);
+      const ctl = d ? d.defense.control : null;
+      if (d && jumpAt !== null) d.defense.setControl('human');
+      const before = P.lastShotId, sh = h.offense.shooting, inp = h.input.source;
+      const press = () => { if (inp === g.input) this.keyDown('Space'); else inp.press('shoot'); };
+      const release = () => { if (inp === g.input) this.keyUp('Space'); else inp.release('shoot'); };
+      press();
+      let i = 0;
+      this.until(() => {
+        if (jumpAt !== null && i === jumpAt + (seed % 12) * 2) d.defense.humanInput.jump = true;
+        i++;
+        if (sh.isShooting && sh.shotTime >= sh.settings.idealRelease + offset) release();
+        return P.state === 'SHOT_RESOLVING' || P.state === 'POSSESSION_TRANSITION';
+      }, 600);
+      release();
+      if (d && ctl) d.defense.setControl(ctl);
+      const r = g.scoring.lastResult;
+      if (r && r.shotId !== before && want(r)) return { r, team };
+      // not the result we need: give the same team the ball again and retry
+      this.until(() => P.state === 'POSSESSION_START', 600);
+      P.devReset(team);
+    }
+    return { r: null };
+  }
+
+  // After a result: the next possession starts; check who has it.
+  afterResult(tag, r, team, expectTeam, expectReason) {
+    this.until(() => this.P.state === 'POSSESSION_START', 600);
+    const P = this.P;
+    this.check(`${tag}: ${r ? r.result : 'none'} -> ${expectTeam}`, r && P.offenseTeamId === expectTeam && P.possessionStartReason === expectReason,
+      `${team} shot ${r ? r.result : '-'}; next ${P.offenseTeamId} (${P.possessionStartReason})`);
+    this.roles(tag);
+    this.live();
+  }
+
+  run() {
+    const g = this.g, P = this.P, rules = ISO.GAMEFLOW.rules, target = rules.targetScore;
+    this.bot(false);
+    rules.targetScore = 999;           // shots pile up while retrying; the 11 test sets scores itself
+    const other = (t) => g.roster.otherTeam(t);
+
+    // ---- 1. directions on offense, then across repeated possession changes ----
+    P.devReset('A'); this.live(); this.roles('start');
+    this.directions('offense top', { reset: () => this.place(0, 9.5, 2.6) });
+    this.directions('offense left wing', { reset: () => this.place(-5.5, 6.5, 2.6) });
+    this.directions('offense corner', { reset: () => this.place(6.4, 1.8, 2.6) });
+    this.directions('offense sprint', { reset: () => this.place(0, 9.5, 2.6), sprint: true });
+    for (let k = 0; k < 2; k++) {
+      // miss -> I defend
+      let s = this.shoot((r) => !r.made, { offset: 0.13 });
+      this.afterResult(`miss #${k + 1}`, s.r, s.team, other(s.team), s.r && s.r.wasBlocked ? 'BLOCK' : 'MISS');
+      this.directions(`defense top #${k + 1}`, { reset: () => this.place(0, 8.1, 2.6) });
+      this.directions(`defense right wing #${k + 1}`, { reset: () => this.place(5.0, 6.0, 2.6) });
+      this.directions(`defense left wing #${k + 1}`, { reset: () => this.place(-5.0, 6.0, 2.6) });
+      this.directions(`defense near rim #${k + 1}`, { reset: () => this.place(0.5, 3.2, 2.6) });
+      this.directions(`defense corner #${k + 1}`, { reset: () => this.place(-6.0, 2.0, 2.6) });
+      this.directions(`defense side-on #${k + 1}`, { reset: () => this.place(0, 8.1, 2.6, 1.6) });
+      this.directions(`defense sprint #${k + 1}`, { reset: () => this.place(0, 8.1, 2.6), sprint: true });
+      this.directions(`defense hands up #${k + 1}`, { reset: () => this.place(0, 8.1, 2.6), handsUp: true });
+      this.directions(`defense after jump #${k + 1}`, { reset: () => { this.place(0, 8.1, 2.6); this.keyDown('Space'); this.step(1); this.keyUp('Space'); this.step(50); } });
+      // contact on defense: walking into the ball handler never goes through them
+      this.place(0, 8.1, 1.2);
+      let minGap = 9;
+      this.keyDown('KeyS');
+      for (let i = 0; i < 45; i++) { this.step(); minGap = Math.min(minGap, this.me.active.position.distanceTo(this.g.handler.offense.position)); }
+      this.keyUp('KeyS');
+      this.check(`contact: defender into ball handler #${k + 1}`, minGap > 0.45, `closest ${minGap.toFixed(2)} m`);
+      // offensive keys pressed while defending must not fire later
+      this.keyDown('KeyE'); this.keyDown('KeyQ'); this.keyDown('KeyZ'); this.step(2);
+      this.keyUp('KeyE'); this.keyUp('KeyQ'); this.keyUp('KeyZ');
+      // CPU misses -> I am back on offense
+      s = this.shoot((r) => !r.made, { offset: 0.13 });
+      this.afterResult(`CPU miss #${k + 1}`, s.r, s.team, other(s.team), s.r && s.r.wasBlocked ? 'BLOCK' : 'MISS');
+      this.step(6);
+      const o = this.me.offense;
+      this.check(`no stale moves after regaining the ball #${k + 1}`, !o.dribble.currentMove && !o.stepBack.isSteppingBack, o.dribble.currentMove || (o.stepBack.isSteppingBack ? 'stepBack' : 'clean'));
+      // contact on offense: driving into the set defender never goes through them
+      this.placeHandler(0, 9.0, 1.2);
+      minGap = 9;
+      this.keyDown('KeyW');
+      for (let i = 0; i < 45; i++) { this.step(); minGap = Math.min(minGap, this.me.active.position.distanceTo(this.g.defender.position)); }
+      this.keyUp('KeyW');
+      this.check(`contact: ball handler into defender #${k + 1}`, minGap > 0.45, `closest ${minGap.toFixed(2)} m`);
+      this.directions(`offense again #${k + 1}`, { reset: () => this.place(0, 9.5, 2.6) });
+    }
+
+    // ---- 2. make-it-take-it (both teams), blocked miss ---------------------------
+    for (const team of ['A', 'B']) {
+      P.devReset(team); this.live();
+      const s = this.shoot((r) => r.result === 'MAKE');
+      this.afterResult(`make-it-take-it ${team}`, s.r, s.team, team, 'MAKE');
+      const m = this.shoot((r) => r.result === 'MISS', { offset: 0.13 });
+      this.afterResult(`miss switches ${team}`, m.r, m.team, other(team), 'MISS');
+    }
+    P.devReset('A'); this.live();
+    const b = this.shoot((r) => r.result === 'BLOCKED_MISS', { jumpAt: 12 });
+    this.afterResult('blocked miss', b.r, b.team, 'B', 'BLOCK');
+
+    // ---- 3. scoring: 1 inside, 2 outside, 0 for a miss ----------------------------
+    const scoreOf = (t) => g.scoring.teamScore[t];
+    P.devReset('A'); this.live();
+    let before = scoreOf('A'), s = this.shoot((r) => r.result === 'MAKE', { z: 6.6 });
+    this.check('inside make = +1', s.r && !s.r.isThree && scoreOf('A') - before === 1, `+${scoreOf('A') - before}`);
+    this.afterResult('after inside make', s.r, 'A', 'A', 'MAKE');
+    before = scoreOf('A'); s = this.shoot((r) => r.result === 'MAKE', { z: 9.3 });
+    this.check('outside make = +2', s.r && s.r.isThree && scoreOf('A') - before === 2, `+${scoreOf('A') - before}`);
+    this.afterResult('after outside make', s.r, 'A', 'A', 'MAKE');
+    before = scoreOf('A'); s = this.shoot((r) => r.result === 'MISS', { offset: 0.13 });
+    this.check('miss = +0', s.r && scoreOf('A') - before === 0, `+${scoreOf('A') - before}`);
+    this.afterResult('after miss', s.r, 'A', 'B', 'MISS');
+
+    // ---- 4. first to 11 ------------------------------------------------------------
+    rules.targetScore = target;
+    const won = [], started = [];
+    g.events.on('gameWon', (e) => won.push(e)); g.events.on('gameStarted', (e) => started.push(e));
+    P.devReset('A'); this.live();
+    g.scoring.teamScore.A = 10; g.scoring.teamScore.B = 7;
+    s = this.shoot((r) => r.result === 'MAKE');
+    this.until(() => P.state === 'POSSESSION_START', 900);
+    this.check('first to 11: game won once', won.length === 1 && won[0].winnerTeamId === 'A' && won[0].score.A >= 11, JSON.stringify(won.map((w) => w.score)));
+    this.check('new game: 0-0, loser\'s ball', scoreOf('A') === 0 && scoreOf('B') === 0 && P.offenseTeamId === 'B' && started.length === 1, `${scoreOf('A')}-${scoreOf('B')} ${P.offenseTeamId} ball`);
+    this.roles('new game');
+    this.live();
+    this.directions('defense in game 2', { reset: () => this.place(0, 8.1, 2.6) });
+
+    rules.targetScore = target;
+    this.releaseAll();
+    this.bot(true);
+    return this.results;
+  }
+};
+
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const g = window.game;
+    g.renderer.setAnimationLoop(null);
+    const t0 = performance.now();
+    const res = new ISO.SelfTest(g).run();
+    const failed = res.filter((r) => !r.ok);
+    window.__SELFTEST = { passed: res.length - failed.length, failed: failed.length, results: res, seconds: +((performance.now() - t0) / 1000).toFixed(1) };
+    const panel = document.createElement('div');
+    Object.assign(panel.style, { position: 'fixed', inset: '20px', overflow: 'auto', background: 'rgba(8,12,22,0.92)', color: '#e8ecf4', font: '12px/1.5 Menlo, Consolas, monospace', padding: '14px', zIndex: 50, whiteSpace: 'pre' });
+    panel.textContent = `SELF-TEST  ${window.__SELFTEST.passed} passed, ${failed.length} failed\n\n` + res.map((r) => `${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  ${r.info}`).join('\n');
+    document.body.append(panel);
+    g.renderer.setAnimationLoop(() => g.tick());
+  }, 300);
+});
+})();

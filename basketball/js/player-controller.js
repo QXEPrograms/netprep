@@ -166,18 +166,9 @@ ISO.PlayerController = class {
     this.model.update(dt, state, pose);
   }
 
-  // Screen axes -> ground-plane direction using the camera's flattened forward/right.
+  // Screen axes -> ground-plane travel direction (the shared convention, input.js).
   _screenToWorld(axes, out) {
-    this.camera.getWorldDirection(this._fwd);
-    this._fwd.y = 0;
-    this._fwd.normalize();
-    this._right.set(-this._fwd.z, 0, this._fwd.x); // forward rotated 90deg clockwise
-    out.set(0, 0, 0)
-      .addScaledVector(this._fwd, axes.y)
-      .addScaledVector(this._right, axes.x);
-    const len = out.length();
-    if (len > 1) out.divideScalar(len);
-    return out;
+    return ISO.ScreenInput.toWorld(axes, this.camera, out);
   }
 
   // 0..1: the matchup is right in front of the ball (protect the dribble).

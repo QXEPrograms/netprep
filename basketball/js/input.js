@@ -1,6 +1,16 @@
 // Input: tracks keyboard state and exposes a simple, device-agnostic snapshot.
 // Later steps can feed touch controls into the same fields.
 ISO.Input = class {
+  // A readable label for a key code (the HUD reads bindings through this).
+  static keyLabel(code) {
+    const ARROWS = { ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→' };
+    if (ARROWS[code]) return ARROWS[code];
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+    if (/^Digit\d$/.test(code)) return code.slice(5);
+    if (/^Shift/.test(code)) return 'Shift';
+    return code;                                   // Space, Enter, ...
+  }
+
   constructor() {
     this.keys = new Set();
     this.bindings = {
@@ -83,4 +93,40 @@ ISO.Input = class {
   isSprinting() {
     return this.pressed('sprint');
   }
+};
+
+// ScreenInput: the ONE movement convention for every player in every role.
+//   raw axes (x = screen right, y = screen up)
+//   -> a ground-plane travel vector through the camera's CURRENT orientation
+//   -> the current role's locomotion (offense or defense)
+//   -> body orientation (facing assist) — which never feeds back into this.
+// Facing, team, attack direction and possession never enter the conversion,
+// so a key means the same screen direction on offense and on defense.
+ISO.ScreenInput = {
+  _f: null, _r: null,
+  // camera forward / right flattened onto the floor
+  basis(camera, fwd, right) {
+    camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    fwd.normalize();
+    right.set(-fwd.z, 0, fwd.x);                  // forward rotated 90 deg clockwise = screen right
+  },
+  // axes -> world travel direction (length 0..1)
+  toWorld(axes, camera, out) {
+    const f = this._f || (this._f = new THREE.Vector3()), r = this._r || (this._r = new THREE.Vector3());
+    this.basis(camera, f, r);
+    out.set(0, 0, 0).addScaledVector(f, axes.y).addScaledVector(r, axes.x);
+    const len = out.length();
+    if (len > 1) out.divideScalar(len);
+    return out;
+  },
+  // world direction -> the axes that would request it (CPU / test input)
+  fromWorld(x, z, camera) {
+    const len = Math.hypot(x, z);
+    if (len < 1e-6) return { x: 0, y: 0 };
+    const f = this._f || (this._f = new THREE.Vector3()), r = this._r || (this._r = new THREE.Vector3());
+    this.basis(camera, f, r);
+    x /= len; z /= len;
+    return { x: x * r.x + z * r.z, y: x * f.x + z * f.z };
+  },
 };

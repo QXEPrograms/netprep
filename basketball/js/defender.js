@@ -182,7 +182,6 @@ ISO.DefenderController = class {
     ai.state = 'guarding'; ai.stateTime = 0; ai.bite = null; ai.freeze = 0; ai._carry = 0; ai._spinBlind = null;
     ai.wantJump = false; ai.handsUp = 0; ai._jumpDecision = null; ai._lastShotSeen = -99;
     ai.intent.velocity.set(0, 0, 0);
-    this.inputMapper.holdDist = null;
     Object.assign(this.humanInput, { x: 0, y: 0, sprint: false, jump: false, handsUp: false });
     const c = this.contest;
     c.isContesting = false; c.contestStrength = 0; c.contestTiming = 0; c.contestHandDistance = Infinity;
@@ -192,10 +191,9 @@ ISO.DefenderController = class {
   // Role change: this player stops defending (hands can never block again
   // until the next reset puts them back on defense).
   deactivate() {
-    this.blocks.clear();
+    // standing, feet down, hands down, no contest/closeout/jump/AI read left over
+    this.reset(this.locomotion.position.clone());
     this.frozen = false;
-    this.handRaise = 0;
-    this.handsUp = 0;
   }
 
   get jumpY() { return this.locomotion.jumpHeight; }

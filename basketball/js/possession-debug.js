@@ -32,8 +32,17 @@ ISO.PossessionDebug = class {
       const who = p.role === 'offense' ? `vs ${p.matchupId || '-'}` : `guards ${p.assignmentId || '-'}`;
       lines.push(`${p.id} team ${p.teamId} ${p.controlSource.padEnd(5)} ${(p.role || '-').padEnd(7)} ${ctl} ${who}${p.isBallHandler ? '  [ball]' : ''}`);
     }
-    // Reference-match line: the matchup as one system.
+    // Input line: your identity, role, raw keys -> screen-relative travel -> what the body did.
     const g = this.game;
+    if (g) {
+      const me = g.localPlayer, A = me.active, ax = me.input.getMoveAxes();
+      const want = ISO.ScreenInput.toWorld(ax, g.cameraController.camera, this._w || (this._w = new THREE.Vector3()));
+      const v = A.locomotion.velocity;
+      const mode = me.role === 'defense' ? `${A.locomotion.mode}${A.frozen ? ' (frozen)' : ''}` : (A.locomotion.level || '-');
+      lines.push(`YOU  ${me.id} team ${me.teamId}  role ${g.humanRole} (entity ${me.role})  HUD ${g.ui.controlsRole}  input ${me.input.enabled ? 'live' : 'off'}`);
+      lines.push(`     keys (${ax.x.toFixed(2)}, ${ax.y.toFixed(2)}) -> travel (${want.x.toFixed(2)}, ${want.z.toFixed(2)})  vel (${v.x.toFixed(2)}, ${v.z.toFixed(2)})  facing ${(A.locomotion.facing * 57.3).toFixed(0)}°  ${mode}`);
+    }
+    // Reference-match line: the matchup as one system.
     if (g && g.defender) {
       const o = g.player, d = g.defender, L = o.locomotion, DL = d.locomotion, dr = o.dribble;
       const gap = Math.hypot(o.position.x - d.position.x, o.position.z - d.position.z);

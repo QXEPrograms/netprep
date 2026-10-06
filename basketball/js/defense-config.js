@@ -39,12 +39,9 @@ ISO.DEFENSE = {
     lockError: 0.35,       // |error| below this = locked
   },
 
-  // ---- human control mapping (future) ---------------------------------------
-  // 'opponent': up = pressure the ball handler, down = retreat toward the
-  // basket, left/right = slide around the ball handler (screen sense).
-  // 'screen': plain camera-relative movement (facing assist still applies).
-  humanInputFrame: 'opponent',
-  humanBackToBasket: 0.4,  // how much "back" blends toward the basket instead of straight away
+  // ---- human control ---------------------------------------------------------
+  // Keys always mean SCREEN directions (ISO.ScreenInput, the same convention as
+  // the offense). Shift = allowed to turn and run; facing is the assist's job.
 
   // ---- CPU positioning -------------------------------------------------------
   positioning: {

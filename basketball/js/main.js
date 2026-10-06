@@ -92,7 +92,7 @@ ISO.Game = class {
     this.possession = new ISO.PossessionSystem({ roster: this.roster, ball: this.ball, hoop: this.hoopPhysics, scoring: this.scoring, events: this.events });
     this.possession.onReset = (e) => this._onPossessionReset(e);
 
-    this.ui = new ISO.UI(document.getElementById('hud'), { role: 'offense', teams: this.roster.teams, roster: this.roster });
+    this.ui = new ISO.UI(document.getElementById('hud'), { role: 'offense', teams: this.roster.teams, roster: this.roster, bindings: this.input.bindings });
     this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
     this.events.on('gameWon', (e) => this.ui.showWin(e));
     if (ISO.CONFIG.debugPhysics) {
@@ -139,7 +139,12 @@ ISO.Game = class {
   get defender() { const d = this.defenderEntity; return d ? d.defense : null; }
   // Your player and the role it is playing.
   get localPlayer() { return this.roster.local || this.roster.players[0]; }
-  get humanRole() { return this.localPlayer.role || 'offense'; }
+  // localPlayerId -> team -> possession.offenseTeamId -> OFFENSE / DEFENSE.
+  get humanRole() {
+    const me = this.localPlayer, P = this.possession;
+    if (!P || P.offenseTeamId === null) return 'offense';
+    return me.teamId === P.offenseTeamId ? 'offense' : 'defense';
+  }
   // The CPU's offense bot (dev), for tests/keys.
   get offenseBot() { const b = this.roster.players.find((p) => p.bot && p.role === 'offense') || this.roster.players.find((p) => p.bot); return b ? b.bot : null; }
 
@@ -196,6 +201,8 @@ ISO.Game = class {
     // The shot's one result, then what it means for possession.
     this.scoring.update(dt);
     P.update(dt);
+    // The controls guide always shows what YOUR role can do right now.
+    this.ui.setRole(this.humanRole);
     // The shot meter is for your own shots; results show for everyone's.
     const mine = this.localPlayer.role === 'offense' ? this.localPlayer.offense : null;
     this.ui.update(dt, {

@@ -95,8 +95,8 @@ html, body {
 /* Release feedback */
 .shot-feedback {
   position: absolute;
-  left: 50%;
-  top: max(11%, 64px);   /* always below the score panel */
+  left: max(20%, min(150px, 25%));  /* beside the hoop, never over the rim and the arriving ball */
+  top: max(17%, 80px);
   transform: translateX(-50%);
   text-align: center;
   opacity: 0;
@@ -173,7 +173,7 @@ html, body {
 .possession-banner {
   position: absolute;
   left: 50%;
-  top: max(25%, 150px);   /* below the shot result text, which may still be fading */
+  top: 60px;              /* just under the score, above the backboard */
   transform: translateX(-50%);
   font-size: clamp(14px, 2.2vw, 20px);
   letter-spacing: 0.3em;
@@ -309,10 +309,9 @@ html, body {
 /* Development: the running reference scenario (?scenario=...) */
 .scenario-label {
   position: absolute;
-  left: 50%;
-  top: 58px;
-  transform: translateX(-50%);
-  max-width: 92vw;
+  right: 12px;
+  bottom: max(13%, 96px);  /* above the controls bar, clear of the hoop and the matchup */
+  max-width: 44vw;
   padding: 4px 10px;
   border-radius: 6px;
   background: rgba(10, 14, 24, 0.7);

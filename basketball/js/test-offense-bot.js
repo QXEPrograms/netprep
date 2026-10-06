@@ -75,11 +75,7 @@ ISO.OffenseTestBot = class {
 
   // World direction -> the screen axes the controller expects.
   _move(x, z) {
-    const f = this._f; this.camera.getWorldDirection(f); f.y = 0; f.normalize();
-    const len = Math.hypot(x, z);
-    if (len < 1e-6) { this.input.axes = { x: 0, y: 0 }; return; }
-    x /= len; z /= len;
-    this.input.axes = { x: x * -f.z + z * f.x, y: x * f.x + z * f.z };
+    this.input.axes = ISO.ScreenInput.fromWorld(x, z, this.camera);
   }
 
   _resetRep(now) {
