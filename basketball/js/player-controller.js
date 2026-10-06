@@ -2,7 +2,7 @@
 // Movement is camera-relative: "up" on the keyboard moves the player up the
 // screen, whatever angle the camera is at.
 ISO.PlayerController = class {
-  constructor({ input, camera, startPosition, startFacing = Math.PI }) {
+  constructor({ input, camera, ball, startPosition, startFacing = Math.PI }) {
     this.input = input;
     this.camera = camera;
 
@@ -11,7 +11,12 @@ ISO.PlayerController = class {
     this.locomotion.facing = startFacing;
 
     this.model = new ISO.PlayerModel();
-    this.model.update(0, this._modelState());
+
+    // Ball handling is its own system; the controller just runs it each frame.
+    this.ball = ball;
+    this.dribble = ball ? new ISO.DribbleController(ball) : null;
+    if (ball) ball.holder = this;
+    this._updateBallHandling(0);
 
     this._fwd = new THREE.Vector3();
     this._right = new THREE.Vector3();
@@ -25,7 +30,19 @@ ISO.PlayerController = class {
     const axes = this.input.getMoveAxes();
     this._screenToWorld(axes, this._dir);
     this.locomotion.update(dt, this._dir, this.input.isSprinting());
-    this.model.update(dt, this._modelState());
+    this._updateBallHandling(dt);
+  }
+
+  // Order matters: the dribble places the ball from the body's new position,
+  // then the model poses its arm onto the ball.
+  _updateBallHandling(dt) {
+    const state = this._modelState();
+    let pose = {};
+    if (this.dribble && this.ball.holder === this) {
+      this.dribble.update(dt, state);
+      pose = { dribble: this.dribble.getArmPose() };
+    }
+    this.model.update(dt, state, pose);
   }
 
   // Screen axes -> ground-plane direction using the camera's flattened forward/right.
@@ -47,8 +64,10 @@ ISO.PlayerController = class {
     return {
       position: l.position,
       facing: l.facing,
+      velocity: l.velocity,
       speed: l.speed,
       runSpeed: l.settings.runSpeed,
+      sprintSpeed: l.settings.sprintSpeed,
       sprinting: l.sprinting,
       turnSpeed: l.turnSpeed,
     };

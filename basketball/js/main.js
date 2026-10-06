@@ -27,13 +27,17 @@ ISO.Game = class {
     this.cameraController.setAspect(container.clientWidth / container.clientHeight);
 
     this.input = new ISO.Input();
+    this.ball = new ISO.Basketball();
+    this.ball.addTo(this.scene);
     this.player = new ISO.PlayerController({
       input: this.input,
       camera: this.cameraController.camera,
+      ball: this.ball,
       startPosition: new THREE.Vector3(0, 0, 8.5), // top of the key
       startFacing: Math.PI,                         // facing the basket
     });
     this.scene.add(this.player.object);
+    this.ball.update(0);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.snap();
 
@@ -51,6 +55,7 @@ ISO.Game = class {
   tick() {
     const dt = Math.min(this.clock.getDelta(), 0.05);
     this.player.update(dt);
+    this.ball.update(dt);
     this.hoop.net.update(dt);
     this.cameraController.setFocus(this.player.position);
     this.cameraController.update(dt);

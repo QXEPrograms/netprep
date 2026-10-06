@@ -1,6 +1,7 @@
 // PlayerModel: an original low-poly humanoid built from primitives, with a
 // procedural run cycle. It only handles visuals; movement lives in Locomotion.
 // The model faces +z in its local space; limbs rotate around pivot groups.
+(function () {
 ISO.PlayerModel = class {
   constructor(options = {}) {
     this.opts = Object.assign({
@@ -18,6 +19,13 @@ ISO.PlayerModel = class {
     this.lean = 0;      // smoothed forward lean
     this.roll = 0;      // smoothed sideways lean into turns
     this.stride = 0;    // smoothed 0..1 amount of running pose
+    this.stance = 0;    // smoothed 0..1 dribbling stance
+    this._ik = {
+      d: new THREE.Vector3(), pole: new THREE.Vector3(), elbow: new THREE.Vector3(),
+      hand: new THREE.Vector3(), u: new THREE.Vector3(), w: new THREE.Vector3(),
+      n: new THREE.Vector3(), x: new THREE.Vector3(), y: new THREE.Vector3(),
+      m: new THREE.Matrix4(),
+    };
 
     this._build();
   }
@@ -93,8 +101,8 @@ ISO.PlayerModel = class {
       mesh(new THREE.CapsuleGeometry(0.06, 0.3, 4, 8), skin, knee, 0, -0.2, 0);
       mesh(new THREE.CylinderGeometry(0.065, 0.06, 0.12, 10), mat(0xffffff, 0.7), knee, 0, -0.34, 0); // sock
       const ankle = pivot(knee, 0, -0.41, 0);
-      mesh(new THREE.BoxGeometry(0.12, 0.09, 0.27), shoe, ankle, 0, -0.02, 0.05);
-      mesh(new THREE.BoxGeometry(0.125, 0.025, 0.28), sole, ankle, 0, -0.07, 0.05);
+      mesh(new THREE.BoxGeometry(0.12, 0.09, 0.27), shoe, ankle, 0, -0.01, 0.05);
+      mesh(new THREE.BoxGeometry(0.125, 0.025, 0.28), sole, ankle, 0, -0.055, 0.05);
       return { side, hip, knee, ankle };
     });
 
@@ -129,7 +137,8 @@ ISO.PlayerModel = class {
 
   // Sync the model to the locomotion state and animate limbs.
   // state: { position, facing, speed, runSpeed, sprinting, turnSpeed }
-  update(dt, state) {
+  // pose (optional): { dribble: { side: +1 right / -1 left, target: world Vector3 } }
+  update(dt, state, pose = {}) {
     this.time += dt;
     this.root.position.copy(state.position);
     this.root.rotation.y = state.facing;
@@ -138,6 +147,8 @@ ISO.PlayerModel = class {
     const sprintAmt = Math.max(0, Math.min(1, (state.speed - state.runSpeed) / 2));
     const k = 1 - Math.exp(-10 * dt);
     this.stride += (moveAmt - this.stride) * k;
+    // Dribbling stance: knees bent, chest over the ball.
+    this.stance += ((pose.dribble ? 1 : 0) - this.stance) * k;
 
     // Advance the cycle by distance travelled so feet don't skate.
     const strideLen = 1.25 + 0.55 * sprintAmt; // meters per half-cycle
@@ -147,13 +158,16 @@ ISO.PlayerModel = class {
     const swing = (0.55 + 0.35 * sprintAmt) * s;
     const p = this.phase;
 
+    // Leg flex (crouch) keeps the feet planted: thigh forward, shin back, foot level.
+    const flex = 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s);
+
     // Legs: opposite phase; knee bends most while the leg swings forward.
     this.legs.forEach((leg, i) => {
       const ph = p + (i === 0 ? 0 : Math.PI);
       const sw = Math.sin(ph);
-      leg.hip.rotation.x = -sw * swing - 0.12 * (1 - s) - 0.05;            // idle: slight athletic bend
-      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 0.22 * (1 - s);
-      leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - 0.1 * (1 - s);
+      leg.hip.rotation.x = -sw * swing - flex;
+      leg.knee.rotation.x = (Math.max(0, Math.cos(ph)) * 1.1 + 0.15) * s + 2 * flex;
+      leg.ankle.rotation.x = -0.25 * s * Math.max(0, -sw) - flex;
     });
 
     // Arms swing opposite to the legs; elbows stay bent like a runner.
@@ -161,25 +175,86 @@ ISO.PlayerModel = class {
       const ph = p + (i === 0 ? Math.PI : 0);
       const sw = Math.sin(ph);
       const idleSway = Math.sin(this.time * 1.6 + i) * 0.03;
-      arm.shoulder.rotation.x = -sw * swing * 0.9 + idleSway;
-      arm.shoulder.rotation.z = arm.side * (0.12 + 0.05 * (1 - s));
-      arm.elbow.rotation.x = -(0.35 + 0.75 * s + 0.2 * sprintAmt) - 0.15 * Math.max(0, sw) * s;
+      arm.shoulder.rotation.set(-sw * swing * 0.9 + idleSway, 0, arm.side * (0.12 + 0.05 * (1 - s)));
+      arm.elbow.rotation.set(-(0.35 + 0.75 * s + 0.2 * sprintAmt) - 0.15 * Math.max(0, sw) * s, 0, 0);
     });
 
-    // Whole-body motion: crouch when idle, bob while running, lean forward with speed
+    // Whole-body motion: crouch, bob while running, lean forward with speed
     // and into turns.
     const bob = Math.abs(Math.sin(p)) * 0.06 * s;
-    const crouch = 0.05 * (1 - s);
-    this.body.position.y = bob - crouch;
+    this.body.position.y = bob - 0.85 * (1 - Math.cos(flex));
 
-    const targetLean = 0.08 * s + 0.12 * sprintAmt;
+    const targetLean = 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance;
     this.lean += (targetLean - this.lean) * k;
     const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s));
     this.roll += (targetRoll - this.roll) * k;
     this.torso.rotation.x = this.lean + 0.06 * (1 - s);
     this.body.rotation.z = this.roll;
-    this.torso.rotation.y = Math.sin(p) * 0.12 * s; // counter-rotate shoulders
+    this.torso.rotation.y = Math.sin(p) * 0.12 * s * (1 - 0.5 * this.stance); // counter-rotate shoulders
     this.head.rotation.y = -this.torso.rotation.y * 0.8;
     this.head.rotation.x = -this.lean * 0.6;
+
+    if (pose.dribble) this._poseDribble(pose.dribble);
+  }
+
+  // Dribbling hand reaches for the ball (2-bone IK); the off hand guards.
+  _poseDribble({ side, target }) {
+    // Character right (+1) is local -x, which is arms[0].
+    const ballArm = this.arms.find((a) => a.side === -side);
+    const offArm = this.arms.find((a) => a.side === side);
+    const st = this.stance;
+
+    // Off arm: forearm out in front as a guard, blended in with the stance.
+    offArm.shoulder.rotation.x = lerp(offArm.shoulder.rotation.x, -0.55, st);
+    offArm.shoulder.rotation.z = lerp(offArm.shoulder.rotation.z, offArm.side * 0.32, st);
+    offArm.elbow.rotation.x = lerp(offArm.elbow.rotation.x, -1.15, st);
+
+    this.solveArmIK(ballArm, target);
+  }
+
+  // Point the arm chain so the hand center lands on `target` (world space).
+  // Exact two-bone solve in the shoulder's parent (torso) space: the elbow sits
+  // in the plane of the target and a pole direction (back and out, like a real
+  // elbow), then the shoulder's basis is built from that plane.
+  solveArmIK(arm, target) {
+    const L1 = 0.31, L2 = 0.29; // shoulder->elbow, elbow->hand
+    const v = this._ik;
+    this.root.updateMatrixWorld(true);
+
+    const d = this.torso.worldToLocal(v.d.copy(target)).sub(arm.shoulder.position);
+    const D = Math.min(Math.max(d.length(), 0.1), L1 + L2 - 0.002);
+    d.normalize();
+
+    // Angle between the upper arm and the shoulder->target line.
+    const alpha = Math.acos(clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1));
+
+    // Pole: elbows point backward and slightly outward/down.
+    const pole = v.pole.set(arm.side * 0.5, -0.2, -1);
+    pole.addScaledVector(d, -pole.dot(d));
+    if (pole.lengthSq() < 1e-6) pole.set(arm.side, 0, 0).addScaledVector(d, -d.x * arm.side);
+    pole.normalize();
+
+    // Elbow and hand positions (relative to the shoulder).
+    const elbow = v.elbow.copy(d).multiplyScalar(Math.cos(alpha) * L1).addScaledVector(pole, Math.sin(alpha) * L1);
+    const hand = v.hand.copy(d).multiplyScalar(D);
+    const u = v.u.copy(elbow).normalize();                    // upper-arm direction
+    const w = v.w.copy(hand).sub(elbow).normalize();          // forearm direction
+
+    // Shoulder basis: local -y along the upper arm, local +z toward the bend.
+    const n = v.n.copy(w).addScaledVector(u, -w.dot(u));
+    if (n.lengthSq() < 1e-6) n.copy(pole).multiplyScalar(-1).addScaledVector(u, pole.dot(u));
+    n.normalize();
+    const y = v.y.copy(u).negate();
+    const x = v.x.crossVectors(y, n);
+    v.m.makeBasis(x, y, n);
+    arm.shoulder.quaternion.setFromRotationMatrix(v.m);
+
+    // Elbow hinge: rotating -bend about x swings the forearm toward +z.
+    const bend = Math.acos(clamp(u.dot(w), -1, 1));
+    arm.elbow.rotation.set(-bend, 0, 0);
   }
 };
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+})();
