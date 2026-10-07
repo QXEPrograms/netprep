@@ -49,6 +49,37 @@ ISO.PlayerModel = class {
     this.L2 = this.rig.dims.forearm;      // elbow -> palm centre
 
     this._bindRig();
+    // Continuity (Step 16.5, visual only): the drawn root absorbs one-frame
+    // velocity jumps of the gameplay root/facing (contacts, move takeovers);
+    // procedural bones absorb one-frame pose jumps (layer switches).
+    this._rootInertia = new ISO.VelocityInertia({ kick: 1.6, maxOffset: 0.06, omega: 22, dims: 3 });
+    this._yawInertia = new ISO.VelocityInertia({ kick: 5, maxOffset: 0.35, omega: 20, angle: true });
+    const r = this.rig;
+    this._poseInertia = new ISO.PoseInertia([r.root, r.hips, r.spineLower, r.spineUpper, r.chest, r.neck, r.head,
+      r.rightClavicle, r.leftClavicle, r.rightHand, r.leftHand, r.rightThigh, r.rightShin, r.rightFoot, r.leftThigh, r.leftShin, r.leftFoot],
+      { posBone: r.root });
+    this._visRoot = new THREE.Vector3();
+    // arms after the IK: only while the hand is not on the ball
+    this._armInertia = new ISO.PoseInertia(this.arms.flatMap((a) => [a.shoulder, a.elbow]));
+    this._armGate = (i) => { const a = this.arms[i >> 1]; return (a.ikWeight > 0.6 && a._onBall) || a._reaching || this._exact; };
+  }
+
+  // Critically damped blend of obj[key] toward target (velocity kept in
+  // obj[key + 'V']): blends start and stop smoothly instead of with a kink.
+  _spring(obj, key, target, omega, dt) {
+    const vk = key + 'V';
+    if (dt <= 0 || obj[key] === undefined) { obj[key] = target; obj[vk] = 0; return obj[key]; }
+    const r = ISO.Smooth.damp(obj[key], obj[vk] || 0, target, omega, dt);
+    obj[key] = r[0]; obj[vk] = r[1];
+    return r[0];
+  }
+
+  // Forget motion history (possession resets / teleports).
+  resetContinuity() {
+    this._rootInertia.reset(); this._yawInertia.reset(); this._poseInertia.reset(); this._armInertia.reset();
+    for (const a of this.arms) { a._tOff && a._tOff.set(0, 0, 0); a._tHas = false; }
+    for (const l of this.legs) if (l.st) { l.st.init = false; l.st.swing = false; }
+    this._stepW = 0; this._lastRoot = null;
   }
 
   // Name the rig bones the way the pose layers think about them.
@@ -96,8 +127,16 @@ ISO.PlayerModel = class {
   //   body:  { crouch: 0..1 extra dip, twist: torso yaw (rad), roll: sideways lean (rad) } } }
   update(dt, state, pose = {}) {
     this.time += dt;
-    this.root.position.copy(state.position);
-    this.root.rotation.set(0, state.facing, 0);
+    // drawn root = gameplay root + a tiny offset that only exists right after
+    // a one-frame velocity jump (cm, ~0.1 s); collisions stay on the gameplay root
+    // While this body's hands are gameplay colliders (block hands live, a
+    // steal reach), the drawn body is exactly the gameplay body.
+    this._exact = !!(pose.handsLive || (pose.balance && pose.balance.reach));
+    if (this._exact) { this._rootInertia.reset(); this._yawInertia.reset(); }
+    const po = this._rootInertia.update(state.position, dt), yo = this._yawInertia.update(state.facing, dt)[0];
+    this.root.position.set(state.position.x + po[0], state.position.y + po[1], state.position.z + po[2]);
+    this._gameSpeed = state.velocity ? Math.hypot(state.velocity.x, state.velocity.z) : state.speed || 0;
+    this.root.rotation.set(0, state.facing + yo, 0);
     // bones the layers below only add to start from rest every frame
     this.body.rotation.set(0, 0, 0);
     this.hips.position.copy(this._restHips); this.hips.rotation.set(0, 0, 0);
@@ -109,10 +148,10 @@ ISO.PlayerModel = class {
     const moveAmt = Math.min(1, state.speed / state.runSpeed);        // 0..1 at run speed
     const sprintAmt = Math.max(0, Math.min(1, (state.speed - state.runSpeed) / 2));
     const k = 1 - Math.exp(-10 * dt);
-    this.stride += (moveAmt - this.stride) * k;
+    this._spring(this, 'stride', moveAmt, 20, dt);
     // Dribbling stance: knees bent, chest over the ball.
     const stanceTarget = pose.dribble ? (pose.dribble.stance ?? 1) : 0;
-    this.stance += (stanceTarget - this.stance) * k;
+    this._spring(this, 'stance', stanceTarget, 20, dt);
 
     // Basketball locomotion (offense): lean/weight/twist from the movement
     // system. Absent for other characters -> the plain run cycle as before.
@@ -188,9 +227,9 @@ ISO.PlayerModel = class {
     // (velocity + acceleration); otherwise from speed as before.
     const targetLean = lp ? 0.16 * this.stance + 0.1 * extra.crouch
       : 0.08 * s + 0.12 * sprintAmt + 0.16 * this.stance + 0.1 * extra.crouch;
-    this.lean += (targetLean - this.lean) * k;
+    this._spring(this, 'lean', targetLean, 20, dt);
     const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s)) * (extra.turnRoll ?? 1) * (lp ? 0.4 : 1);
-    this.roll += (targetRoll - this.roll) * k;
+    this._spring(this, 'roll', targetRoll, 20, dt);
     this.torso.rotation.x = this.lean + 0.06 * (1 - s) + (lp ? lp.pitch : 0);
     this.body.rotation.z = this.roll + extra.roll + (lp ? lp.roll : 0);
     // Movement lean pivots near the hips (not the feet): the feet push out to
@@ -211,9 +250,13 @@ ISO.PlayerModel = class {
     this._spreadSpine();
     this._poseBalance(dt, pose.balance || null);
     this._poseWrists(dt, pose);
+    this._poseInertia.apply(dt, this._exact ? EXACT : null);
     this._ground();
+    if (this._stepFeet(dt, pose)) this._ground();
+    this._handsLive = !!pose.handsLive;
     this._poseArms(dt, pose.dribble);
     this._poseBalanceArms();
+    this._armInertia.apply(dt, this._armGate);
   }
 
   // World position of a hand's palm centre (side: +1 character right, -1 left),
@@ -225,6 +268,108 @@ ISO.PlayerModel = class {
   }
 
   // ---- adapter layers ---------------------------------------------------------------
+
+  // Foot planting (a light procedural stepper). While the player is in
+  // ordinary locomotion / stance, each foot stays planted at a world point
+  // and the leg IK bends under the moving hips; when the body has moved far
+  // enough from it, the foot takes a quick lifted step to just ahead of where
+  // the procedural pose wants it, one foot at a time. The procedural pose still
+  // decides stance width, jabs, crouch and the knee's direction. Keyed actions
+  // (shots, finishes, step-backs, hops, falls, jumps) fade the stepper out and
+  // own the legs. Returns true when it moved a leg.
+  _stepFeet(dt, pose) {
+    const keyed = !!(pose.shot || pose.finish || pose.stepBack || pose.pass || this._noLock || this._airY > 0.005);
+    const gs = this._gameSpeed || 0;
+    // stance, slides, settles and stops plant feet; at running speed the run
+    // cycle (with its flight phase) reads better and takes over
+    // forward running hands over to the run cycle; shuffles / slides keep planting
+    const runness = pose.defense ? (this._defRun || 0) : 1 - (this.latAmt || 0);
+    const want = keyed || dt <= 0 ? 0 : 1 - smoothstep(2.6, 3.8, gs) * clamp(runness * 1.4, 0, 1);
+    this._stepW = want > (this._stepW || 0) ? ISO.Smooth.approach(this._stepW || 0, want, 12, dt) : ISO.Smooth.approach(this._stepW || 0, want, 30, dt);
+    if (dt <= 0 || this._airY > 0.005) this._stepW = 0;     // off the floor: the jump owns the legs at once
+    const W = this._stepW;
+    this.root.updateMatrixWorld(true);
+    const floor = this.root.position.y, v = this._v;
+    const vel = this._stepVel || (this._stepVel = new THREE.Vector3());
+    if (this._lastRoot && dt > 0) vel.set((this.root.position.x - this._lastRoot.x) / dt, 0, (this.root.position.z - this._lastRoot.z) / dt);
+    (this._lastRoot || (this._lastRoot = new THREE.Vector3())).copy(this.root.position);
+    const speed = Math.hypot(vel.x, vel.z);
+    if (W < 0.003) { for (const leg of this.legs) if (leg.st) leg.st.init = false; return false; }
+    const A = this.rig.dims.ankleY;
+    let moved = false;
+    for (let i = 0; i < 2; i++) {
+      const leg = this.legs[i], other = this.legs[1 - i];
+      const S = leg.st || (leg.st = { init: false, pos: new THREE.Vector3(), from: new THREE.Vector3(), land: new THREE.Vector3(), swing: false, t: 0, T: 0.18 });
+      const home = leg.ankle.getWorldPosition(this._w).clone();        // procedural foot (this frame)
+      const homeLift = Math.max(0, home.y - floor - A);                 // procedural lift (keyed jabs/kicks)
+      if (!S.init) { S.init = true; S.pos.set(home.x, floor + A, home.z); S.swing = false; }
+      const drift = Math.hypot(home.x - S.pos.x, home.z - S.pos.z);
+      // how far the planted foot can be from the hip before the leg is straight
+      const hip = leg.hip.getWorldPosition(this._v2 || (this._v2 = new THREE.Vector3()));
+      const Lmax = this.rig.dims.thigh + this.rig.dims.shin - 0.03, dy = Math.max(0.05, hip.y - (floor + A));
+      const reach = Math.sqrt(Math.max(0.0025, Lmax * Lmax - dy * dy));
+      const fromHip = Math.hypot(hip.x - S.pos.x, hip.z - S.pos.z);
+      // step when the foot is left behind (or the leg runs out of reach), the
+      // other foot is down, and never two steps at once
+      const otherDown = !(other.st && other.st.swing);
+      const stepAt = 0.12 + 0.03 * Math.min(speed, 7);
+      S.need = S.swing ? 0 : Math.max(drift / stepAt, fromHip / (reach * 0.8));
+      // one foot in the air at a time; when both are due, the one further behind goes first
+      const first = !(other.st && !other.st.swing && other.st.need > S.need && other.st.need >= 1);
+      if (!S.swing && otherDown && first && (S.need >= 1 || (speed < 0.3 && drift > 0.06))) {
+        S.swing = true; S.t = 0; S.from.copy(S.pos);
+        S.T = Math.max(0.085, Math.min(0.2, 0.22 - 0.022 * speed));
+        S.land.set(home.x + vel.x * (S.T + 0.06), 0, home.z + vel.z * (S.T + 0.06));
+      }
+      const tgt = v;
+      if (S.swing) {
+        S.t += dt;
+        const u = Math.min(1, S.t / S.T), e = u * u * (3 - 2 * u);
+        // land a little ahead along the motion, so the body passes over the foot
+        const lead = S.T * (1 - u) + 0.06;   // land ahead: the body then passes over the foot
+        const ax = home.x + vel.x * lead, az = home.z + vel.z * lead;
+        tgt.set(S.from.x + (ax - S.from.x) * e, floor + A + (0.05 + 0.012 * speed) * Math.sin(Math.PI * u), S.from.z + (az - S.from.z) * e);
+        if (u >= 1) { S.swing = false; S.pos.set(tgt.x, floor + A, tgt.z); }
+      } else tgt.copy(S.pos);
+      tgt.y += homeLift;                                                // keep keyed lifts (jab step)
+      // blend with the procedural foot while fading in/out
+      if (W < 1) tgt.lerp(home, 1 - W);
+      // stepped feet stay flat (a swinging foot clears the floor, a planted one
+      // sits on its sole); blended with the procedural foot while fading
+      const footQ = leg.ankle.getWorldQuaternion(this._qLock || (this._qLock = new THREE.Quaternion()));
+      footQ.slerp(this.root.quaternion, W);
+      this._solveLegIK(leg, tgt);
+      leg.knee.updateMatrixWorld(true);
+      leg.ankle.quaternion.copy(leg.knee.getWorldQuaternion(this._q).invert().multiply(footQ));
+      moved = true;
+    }
+    return moved;
+  }
+
+  // Two-bone leg IK in the hips' space: ankle to `target` (world), knee
+  // pointing forward. Exact; used only by the foot locks.
+  _solveLegIK(leg, target) {
+    const L1 = this.rig.dims.thigh, L2 = this.rig.dims.shin, v = this._ik;
+    this.root.updateMatrixWorld(true);
+    const d = leg.hip.parent.worldToLocal(v.d.copy(target)).sub(leg.hip.position);
+    const D = Math.min(Math.max(d.length(), 0.1), L1 + L2 - 0.002);
+    d.normalize();
+    const alpha = Math.acos(clamp((L1 * L1 + D * D - L2 * L2) / (2 * L1 * D), -1, 1));
+    // knee pole: where the procedural knee already points (keeps the leg's character)
+    const kneeW = leg.knee.getWorldPosition(v.x), hipW = leg.hip.getWorldPosition(v.y);
+    const pole = leg.hip.parent.worldToLocal(kneeW).sub(leg.hip.parent.worldToLocal(hipW)).normalize();
+    pole.addScaledVector(d, -pole.dot(d));
+    if (pole.lengthSq() < 1e-6) pole.set(0, 0, 1).addScaledVector(d, -d.z);
+    pole.normalize();
+    const u = v.u.copy(d).multiplyScalar(Math.cos(alpha)).addScaledVector(pole, Math.sin(alpha));
+    const n = v.n.copy(d).multiplyScalar(Math.sin(alpha)).addScaledVector(pole, -Math.cos(alpha));
+    const y = v.y.copy(u).negate(), z = n.negate();
+    const x = v.x.crossVectors(y, z);
+    v.m.makeBasis(x, y, z);
+    leg.hip.quaternion.setFromRotationMatrix(v.m);
+    const interior = Math.acos(clamp((L1 * L1 + L2 * L2 - D * D) / (2 * L1 * L2), -1, 1));
+    leg.knee.rotation.set(Math.PI - interior, 0, 0);
+  }
 
   // The torso lean/twist the pose layers set on the lower spine is spread up
   // the spine (a curve instead of one hinge at the waist).
@@ -265,8 +410,10 @@ ISO.PlayerModel = class {
   _poseBalance(dt, b) {
     const k = dt > 0 ? 1 - Math.exp(-16 * dt) : 1;
     const reach = b && b.reach, rx = b && b.reaction;
-    this._reachW += ((reach ? reach.extent : 0) - this._reachW) * k;
+    this._spring(this, '_reachW', reach ? reach.extent : 0, 30, dt);
     this._armOv = null;
+    this._noLock = false;
+    for (const a of this.arms) a._reaching = false;
     if (rx) { this._rx.level = rx.level; this._rx.u = Math.min(1, rx.t / rx.duration); this._rx.dir = this._toLocal(rx.dir, this._rx.dirL || (this._rx.dirL = new THREE.Vector3())); }
     if (this._reachW < 0.003 && !rx) return;
     // room in front: never lean into the ball handler's body
@@ -281,7 +428,7 @@ ISO.PlayerModel = class {
     if (rx) {
       if (rx.level === 1) this._poseStumble(this._rx.u, this._rx.dir, lean);
       else if (rx.level === 2) this._poseStagger(this._rx.u, this._rx.dir, lean);
-      else this._poseFall(this._rx.u, this._rx.dir, lean);
+      else { this._poseFall(this._rx.u, this._rx.dir, lean); this._noLock = true; }
     }
     // limit the part of the lean that goes toward the ball handler
     // (the top of the body moves along (-roll, pitch) in local x/z)
@@ -306,6 +453,7 @@ ISO.PlayerModel = class {
     this._reachSide = side;
     const armSide = -side;                                  // local x of the reaching arm
     const arm = this.arms.find((a) => a.side === armSide);
+    arm._reaching = true;          // the steal hand is posed exactly (its collider is gameplay)
     this.spineUpper.rotation.y += side * 0.2 * e;
     this.chest.rotation.y += side * 0.2 * e;
     arm.clavicle.rotation.y += side * 0.32 * e;             // shoulder forward
@@ -394,17 +542,18 @@ ISO.PlayerModel = class {
     // spine: pitch keyed in the turned frame (positive = over the feet)
     lean.pitch += k[3] * w;
     // hands: forward for balance, then down to the floor to catch the fall, then push
-    const floorW = k[7] * w;
-    if (floorW > 0.01) {
+    // arms: forward for balance, and down to the floor to catch the fall —
+    // two overlays that blend (never an either/or switch)
+    const floorW = k[7] * w, fwdW = k[8] * w;
+    this._armOv = [];
+    if (fwdW > 0.005) for (const a of this.arms) this._armOv.push({ arm: a, w: fwdW, sx: -1.0, sz: a.side * 0.5, el: -0.6 });
+    if (floorW > 0.005) {
       this.root.updateMatrixWorld(true);
-      const tgt = (a) => {
-        const p = this.hips.localToWorld(this._v.set(a.side * 0.24, 0, back ? -0.3 : 0.38));
+      for (const a of this.arms) {
+        const p = this.hips.localToWorld(new THREE.Vector3(a.side * 0.24, 0, back ? -0.3 : 0.38));
         p.y = this.root.position.y + 0.06;
-        return p.clone();
-      };
-      this._armOv = this.arms.map((a) => ({ arm: a, w: floorW, target: tgt(a) }));
-    } else if (k[8] > 0.01) {
-      this._armOv = this.arms.map((a) => ({ arm: a, w: k[8] * w, sx: -1.0, sz: a.side * 0.5, el: -0.6 }));
+        this._armOv.push({ arm: a, w: floorW, target: p });
+      }
     }
     this.head.rotation.x += -0.2 * w * (back ? 1 : -0.5);
   }
@@ -439,7 +588,7 @@ ISO.PlayerModel = class {
       want = (1 - smoothstep(sh.land + 0.05, sh.end, sh.t)) * smoothstep(0, 0.08, this._relClock);
     } else this._relClock = 0;
     if (pose.finish && pose.finish.released) want = Math.max(want, 0.6 * (1 - smoothstep(pose.finish.land, pose.finish.end, pose.finish.t)));
-    this._wrist += (want - this._wrist) * (dt > 0 ? 1 - Math.exp(-30 * dt) : 1);
+    this._spring(this, '_wrist', want, 45, dt);
     if (this._wrist < 0.002) return;
     const shooting = this.arms[0];        // character right
     shooting.hand.rotation.x = -0.95 * this._wrist;
@@ -549,7 +698,7 @@ ISO.PlayerModel = class {
   //      run, jumpY, contest (0..1), planting }
   _poseDefense(dt, d) {
     const k = dt > 0 ? 1 - Math.exp(-10 * dt) : 1;
-    this._defRun = (this._defRun ?? 0) + ((d.run ? 1 : 0) - (this._defRun ?? 0)) * k;
+    this._spring(this, '_defRun', d.run ? 1 : 0, 20, dt); this._defRun = clamp(this._defRun, 0, 1);
     const w = 1 - this._defRun;
     if (w <= 0.001) return;
     const lat = d.lateral, fw = d.forward;
@@ -590,7 +739,7 @@ ISO.PlayerModel = class {
     this.body.position.y = lerp(this.body.position.y, lerp(grounded, 0, jf) + (d.jumpY || 0), w);
     this._airY = lerp(this._airY, d.jumpY || 0, w);
     this.body.position.x = lerp(this.body.position.x, 0, w);
-    const lean = lerp(fw < -0.5 ? 0.18 : 0.3, 0.06, d.contest || 0);
+    const lean = lerp(lerp(0.18, 0.3, smoothstep(-0.8, -0.2, fw)), 0.06, d.contest || 0);   // backpedal leans less (blended, no step)
     this.torso.rotation.x = lerp(this.torso.rotation.x, lean, w);
     this.torso.rotation.y = lerp(this.torso.rotation.y, 0, w);
     this.head.rotation.x = lerp(this.head.rotation.x, -0.22 - 0.2 * (d.contest || 0), w);   // eyes up on the ball handler
@@ -716,8 +865,11 @@ ISO.PlayerModel = class {
       // Character right (+1) is local -x, i.e. arm.side === -1.
       const req = dribble ? dribble.hands.find((h) => h.side === -arm.side) : null;
       const want = req ? req.weight : 0;
-      arm.ikWeight += (want - arm.ikWeight) * k;
-      if (req && want > 0) arm.ikTarget.copy(req.target);
+      this._spring(arm, 'ikWeight', want, 40, dt); arm.ikWeight = clamp(arm.ikWeight, 0, 1);
+      if (req && want > 0) this._armTarget(arm, req.target, dt);
+      else arm._tHas = false;
+      // hand on (or reaching for) the ball: the IK must stay exact
+      arm._onBall = !!(req && want > 0.5 && this.ball && arm.ikTarget.distanceTo(this.ball.position) < 0.35);
 
       // Free pose: guard arm out in front, blended in with the dribble stance.
       arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -0.55, st);
@@ -741,6 +893,32 @@ ISO.PlayerModel = class {
       arm.shoulder.quaternion.copy(freeQ.slerp(arm.shoulder.quaternion, arm.ikWeight));
       arm.elbow.rotation.x = lerp(freeElbow, arm.elbow.rotation.x, arm.ikWeight);
     }
+  }
+
+  // IK target continuity: when the requested hand target jumps (the request
+  // switched from one source to another — dribble -> shot hands, a move
+  // taking the ball), the hand eases over from where it was drawn within
+  // ~0.1 s instead of snapping. A target that moves with the ball, however
+  // fast, passes straight through (the hand stays on the ball).
+  _armTarget(arm, target, dt) {
+    if (!arm._tOff) { arm._tOff = new THREE.Vector3(); arm._tPrev = new THREE.Vector3(); arm._tVel = new THREE.Vector3(); arm._tOut = new THREE.Vector3(); }
+    // hands that are gameplay colliders (block hands live, a steal reach) are
+    // never eased: they go exactly where the defender puts them
+    if (this._exact) { arm._tHas = false; arm.ikTarget.copy(target); return; }
+    if (!arm._tHas || dt <= 0) {
+      arm._tHas = dt > 0; arm._tOff.set(0, 0, 0); arm._tVel.set(0, 0, 0);
+      arm._tPrev.copy(target); arm.ikTarget.copy(target); arm._tOut.copy(target);
+      return;
+    }
+    const v = this._v.copy(target).sub(arm._tPrev);
+    // predicted from last frame's motion; a big miss is a jump
+    const miss = this._w.copy(v).addScaledVector(arm._tVel, -dt).length();
+    if (miss > 0.07 && arm.ikWeight > 0.3) arm._tOff.copy(arm._tOut).sub(target);
+    arm._tVel.copy(v).divideScalar(dt);
+    arm._tPrev.copy(target);
+    arm._tOff.multiplyScalar(Math.exp(-dt / 0.05));
+    arm.ikTarget.copy(target).add(arm._tOff);
+    arm._tOut.copy(arm.ikTarget);
   }
 
   // Point the arm chain so the hand center lands on `target` (world space).
@@ -785,6 +963,7 @@ ISO.PlayerModel = class {
 };
 
 const MAX_SHRUG = 0.1;
+const EXACT = () => true;     // pose-inertia gate: draw every bone exactly as posed
 // Steal reach through the body (tuned so the reach covers the same ground as
 // the Step 15B reach did: same contact rates on the steal sweeps).
 const REACH = { pitch: 0.4, roll: 0.1, frontHip: 0.4, frontKnee: 0.5, backKnee: 0.3, forward: 0.09 };

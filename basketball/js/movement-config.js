@@ -123,16 +123,19 @@ ISO.MOVEMENT = {
     height: 6,              // m above it (high enough to see the defender over the ball handler)
     lookHeight: 0.5,        // aim this high...
     lookAhead: 2,           // ...and this far past the framed point toward the basket
-    smoothing: 5,           // focus follow (1/s): restrained, no lag you can feel
+    smoothing: 5,           // (Step 14 first-order follow rate, kept for reference)
+    followOmega: 12,        // critically damped follow (1/s): same lag as smoothing 5 at a steady run (2/omega = 0.2 s), no jerk on cuts
     defenderWeight: 0.3,    // frame the matchup, not just the ball handler
     basketBias: 0.3,        // pull toward the rim (the basket stays in the shot)
     driveBasketBias: 0.42,  // ...more once you've beaten your man and are attacking
     biasSmoothing: 2.5,
+    biasOmega: 5,           // critically damped basket-bias blend (1/s)
     // yaw: leans toward the rim -> ball handler line so the basket stays "up
     // the screen" from the wings; slow and limited so WASD stays predictable
     yawFollow: 0.55,        // fraction of that angle
     maxYaw: 0.5,            // rad (~29 deg) at most
-    yawSmoothing: 2.2,      // 1/s
+    yawSmoothing: 2.2,      // 1/s (Step 14 first-order, kept for reference)
+    yawOmega: 4.4,          // critically damped yaw follow (1/s), same settle as yawSmoothing 2.2
     yawRate: 0.9,           // rad/s at most
     yawFadeNear: 2.5,       // no yaw follow inside this distance of the rim...
     yawFadeRange: 2.5,      // ...fading in over this much more

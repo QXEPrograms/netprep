@@ -20,6 +20,7 @@ ISO.PlayerController = class {
 
     // Ball handling is its own system; the controller just runs it each frame.
     this.ball = ball;
+    if (ball) this.model.ball = ball;     // read-only: keeps the arm IK exact while a hand is on the ball
     this.dribble = ball ? new ISO.DribbleController(ball) : null;
     this.stepBack = new ISO.StepBackMove();
     this.shooting = ball ? new ISO.ShootingSystem(ball) : null;
@@ -111,6 +112,7 @@ ISO.PlayerController = class {
     this._cancelAll();
     this.locomotion.resetMotion(position, facing);
     if (this.bodyPose) this.bodyPose.reset();
+    this.model.resetContinuity();         // no motion history across the reset
     if (withBall && this.ball) {
       this.ball.resetForPossession(this);
       this.dribble.resetFor(hand);

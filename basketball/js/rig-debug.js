@@ -5,6 +5,10 @@
 //
 // ?stress=6 (development only): adds visual-only V2 players (no gameplay) and
 // measures model update + render time, for the future 3v3 budget.
+//
+// The panel also keeps a short transition log (Step 16.5): pose-source
+// changes per player, and how many one-frame jumps the continuity layers
+// (velocity / pose / arm inertialization) absorbed.
 (function () {
 const Q = window.location.search;
 
@@ -35,6 +39,8 @@ ISO.RigDebug = class {
       background: 'rgba(8,12,22,0.78)', color: '#e8ecf4', font: '11px/1.45 Menlo, Consolas, monospace', whiteSpace: 'pre', pointerEvents: 'none', zIndex: 5 });
     document.getElementById('hud').appendChild(this.panel);
     this._v = new THREE.Vector3();
+    this.log = [];
+    this.t0 = performance.now();
   }
 
   update() {
@@ -54,9 +60,16 @@ ISO.RigDebug = class {
       }
       let k = 0;
       for (const l of M.legs) for (const sp of [[0, -0.0675, -0.085], [0, -0.06, 0.2]]) it.soles[k++].position.copy(l.ankle.localToWorld(this._v.set(...sp)));
+      if (it.src !== undefined && it.src !== M._xfSource) {
+        this.log.push(`${((performance.now() - this.t0) / 1000).toFixed(2)}s ${p.id} ${it.src} -> ${M._xfSource}`);
+        if (this.log.length > 8) this.log.shift();
+      }
+      it.src = M._xfSource;
       const rx = M._rx && p.role === 'defense' && p.defense.locomotion.reaction ? `reaction L${M._rx.level} u ${M._rx.u.toFixed(2)}` : 'reaction -';
       lines.push(`${p.id} ${p.role.padEnd(7)} pose ${String(M._xfSource).padEnd(8)} air ${M._airY.toFixed(2)}  palm->ball R ${d[0].toFixed(2)} L ${d[1].toFixed(2)} m  reach ${M._reachW.toFixed(2)}  ${rx}`);
+      lines.push(`   absorbed jumps: root ${M._rootInertia.jumps} yaw ${M._yawInertia.jumps} pose ${M._poseInertia.jumps} arms ${M._armInertia.jumps}${M._exact ? '  EXACT (hands are colliders)' : ''}`);
     }
+    if (this.log.length) lines.push('transitions:', ...this.log.map((x) => '  ' + x));
     this.panel.textContent = lines.join('\n');
   }
 };

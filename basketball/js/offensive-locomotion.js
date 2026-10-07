@@ -25,6 +25,7 @@ const H = ISO.CONFIG.hoop;
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (a, b, v) => { const t = clamp01((v - a) / (b - a)); return t * t * (3 - 2 * t); };
 
 ISO.OffensiveLocomotion = class extends ISO.Locomotion {
   constructor(options = {}) {
@@ -173,7 +174,7 @@ ISO.OffensiveLocomotion = class extends ISO.Locomotion {
     if (drive && drive.exactFacing) {
       this.facing = wrap(drive.facing);
     } else {
-      const goal = drive ? drive.facing : O.hipTarget();
+      const goal = drive ? drive.facing : O.hipTarget(dt);
       const diff = wrap(goal - this.facing);
       const maxRate = drive ? 30 : lerp(M.orientation.hipTurnRate, M.orientation.hipTurnRateSprint, clamp01((this.attack - 0.5) * 2));
       let step = diff * (1 - Math.exp(-(drive ? S.turnRate : M.orientation.turnSmoothing) * dt));
@@ -259,19 +260,23 @@ ISO.OffenseOrientation = class {
     this.engageYaw = Math.atan2(this.engagePoint.x - A.x, this.engagePoint.z - A.z);
   }
 
-  // Target yaw for the hips this frame.
-  hipTarget() {
+  // Target yaw for the hips this frame. Every ingredient blends continuously
+  // (speed, retreat angle, beaten): a target that jumps makes the hips whip
+  // at their turn-rate limit for a frame (Step 16.5 continuity fix; the
+  // squared / open / retreat behaviour itself is unchanged).
+  hipTarget(dt = 0) {
     const L = this.loco, cfg = ISO.MOVEMENT.orientation, v = L.velocity, speed = L.speed;
-    const travel = speed > 0.4 ? Math.atan2(v.x, v.z) : this.engageYaw;
+    const travel = speed > 0.05 ? Math.atan2(v.x, v.z) : this.engageYaw;
     const diff = wrap(travel - this.engageYaw);
     const runBlend = clamp01(L.attack / 0.5);
-    let open;
-    if (Math.abs(diff) > cfg.backAngle && !L.sprinting) open = 0;                 // retreat: stay square
-    else if (Math.abs(diff) > cfg.backAngle) open = clamp01(L.attack);           // sprinting away: turn and run
-    else {
-      open = lerp(cfg.openControlled * clamp01(speed / cfg.openSpeed), 1, runBlend * clamp01(speed / 2));
-      if (this.beaten && speed > 2) open = Math.max(open, 0.85);
-    }
+    let open = lerp(cfg.openControlled * clamp01(speed / cfg.openSpeed), 1, runBlend * clamp01(speed / 2));
+    const k = dt > 0 ? 1 - Math.exp(-10 * dt) : 1;
+    this._beatenW = (this._beatenW ?? 0) + ((this.beaten ? 1 : 0) - (this._beatenW ?? 0)) * k;
+    open = lerp(open, Math.max(open, 0.85), this._beatenW * smoothstep(1.6, 2.4, speed));
+    // retreat (travel well behind the target): square, unless sprinting away
+    const back = smoothstep(cfg.backAngle - 0.15, cfg.backAngle + 0.15, Math.abs(diff));
+    open = lerp(open, L.sprinting ? clamp01(L.attack) : 0, back);
+    open *= smoothstep(0.1, 0.5, speed);          // standing still: square to the target
     this.open = open;
     this.hipYaw = this.engageYaw + diff * open;
     return this.hipYaw;

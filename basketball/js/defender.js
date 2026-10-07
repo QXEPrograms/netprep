@@ -120,6 +120,7 @@ ISO.DefenderController = class {
     this.locomotion.position.copy(startPosition);
     this.locomotion.facing = startFacing;
     this.model = model || new ISO.PlayerModel({ jersey: 0x2f6fe0, trim: 0xf4f6fa, skin: 0x6b4428, shoes: 0x1b2333, number: '3' });
+    if (ball) this.model.ball = ball;
     this.ai = new ISO.DefenderAI(this);
     this.inputMapper = new ISO.DefenseInputMapper();
     this.contest = new ISO.ContestTracker(this);
@@ -141,6 +142,7 @@ ISO.DefenderController = class {
     this.reactionLevel = 0;             // 0 none, 1 stumble, 2 stagger, 3 fall (while it lasts)
     this._wasReacting = false;
     this._reachT = new THREE.Vector3();
+    this._tmp2 = new THREE.Vector3();
     // Possession transitions: no new intent (CPU or human) — the body just
     // settles in its stance, facing its man.
     this.frozen = false;
@@ -177,6 +179,7 @@ ISO.DefenderController = class {
   // stance, facing their man, feet on the floor, hands down and inactive,
   // with a fresh view of the play (nothing carried over from before).
   reset(position) {
+    this.model.resetContinuity();       // no motion history across the reset
     const L = this.locomotion, O = this.opponent.locomotion.position;
     L.position.copy(position);
     L.velocity.set(0, 0, 0);
@@ -185,6 +188,7 @@ ISO.DefenderController = class {
     L.sprinting = false; L.lateralSpeed = 0; L.forwardSpeed = 0;
     L.jumpState = 'ground'; L.jumpHeight = 0; L.verticalVelocity = 0; L.jumpTime = 0; L._carryRun = false;
     this.handRaise = 0; this.handsUp = 0; this._contestReach = null;
+    if (this.hands) for (const h of this.hands) { h.contestReach = null; h.sideW = undefined; }
     const ai = this.ai;
     ai._buf.length = 0; ai.perceived = ai.prevPerceived = null; ai._perceivedT = ai.time;
     ai._recentFakes.length = 0; ai._recentCrossovers.length = 0; ai._lastCrossoverSeen = -99;
@@ -397,30 +401,38 @@ ISO.DefenderController = class {
     const ball = this.ball.position;
     const aim = this._aim.copy(ball);
     if (this.ball.mode !== ISO.Basketball.MODES.FREE) aim.y += A.anticipate;
+    // Which hand is on the ball side blends over ~60 ms instead of flipping
+    // the instant the ball crosses the defender's nose (Step 16.5: the hands
+    // used to jump 28 cm in one frame there).
+    // (only the low guard hands blend: once hands can block, the switch is
+    // instant, exactly as before — those hands are gameplay colliders)
+    const handsLive = L.jumpState === 'air' || L.jumpState === 'load' || this.handRaise > 0.3;
+    const kSide = dt > 0 && !handsLive ? 1 - Math.exp(-16 * dt) : 1;
     for (const h of this.hands) {
-      const ballSide = h.side === bs;
+      const wantSide = h.side === bs ? 1 : 0;
+      h.sideW = h.sideW === undefined || dt === 0 ? wantSide : h.sideW + (wantSide - h.sideW) * kSide;
+      const sw = h.sideW;
       // low "active hands"
-      at(h.side * 0.48, 0.28, ballSide ? 1.3 : 1.02, h.target);
+      at(h.side * 0.48, 0.28, 1.02 + 0.28 * sw, h.target);
       if (raise > 0) {
         const arm = this.model.arms.find((a) => a.side === -h.side);
         const sh = arm.shoulder.getWorldPosition(this._sh);
-        let reach;
-        if (ballSide) {
+        // other arm: partly up, a wall
+        const wall = at(h.side * 0.36, 0.3, 0, this._reach);
+        wall.y = sh.y + 0.3;
+        if (sw > 0.01) {
           const dir = this._dir.copy(aim).sub(sh).normalize();
           dir.y += this.ball.mode === ISO.Basketball.MODES.FREE ? A.aimUpFree : A.aimUp; dir.normalize();
           // the arm swings toward that direction at a hand's speed, not instantly
-          const want = this._reach.copy(sh).addScaledVector(dir, 0.95);
-          if (!this._contestReach || raise < 0.05 || dt === 0) this._contestReach = want.clone();
+          const want = this._tmp2.copy(sh).addScaledVector(dir, 0.95);
+          if (!h.contestReach || raise < 0.05 || dt === 0) h.contestReach = want.clone();
           else {
-            const step = this._tmp.copy(want).sub(this._contestReach), len = step.length(), max = A.handSpeed * dt;
-            this._contestReach.addScaledVector(step, len > max ? max / len : 1);
+            const step = this._tmp.copy(want).sub(h.contestReach), len = step.length(), max = A.handSpeed * dt;
+            h.contestReach.addScaledVector(step, len > max ? max / len : 1);
           }
-          reach = this._contestReach;
-        } else {
-          reach = at(h.side * 0.36, 0.3, 0, this._reach);       // other arm: partly up, a wall
-          reach.y = sh.y + 0.3;
-        }
-        h.target.lerp(reach, raise);
+          wall.lerp(h.contestReach, sw);
+        } else h.contestReach = null;
+        h.target.lerp(wall, raise);
       }
       // running: arms swing free, except shoulder to shoulder with the ball
       // handler (then they stay on targets that keep them out of his chest)
@@ -455,6 +467,8 @@ ISO.DefenderController = class {
         reaction: L.reaction ? { level: L.reaction.level, t: L.reaction.t, duration: L.reaction.duration, dir: L.reaction.dir } : null,
         opponent: this.opponent ? this.opponent.position : null,
       },
+      // hands that can block are gameplay colliders: the arms are drawn exactly
+      handsLive: (L.jumpState === 'air' || L.jumpState === 'load' || this.handRaise > 0.3) && !L.reaction,
     };
   }
 };

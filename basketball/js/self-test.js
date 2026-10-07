@@ -278,6 +278,47 @@ ISO.SelfTest = class {
     this.check('jump shot: a tap is still a pump fake', s.fakeThreshold < s.gatherTime && s.fakeThreshold >= 0.12, `fake < ${s.fakeThreshold * 1000} ms`);
   }
 
+  // Step 16.5: no teleports/dead frames/camera jerks, frame-rate independent smoothing.
+  continuityChecks() {
+    const g = this.g, P = this.P, cam = g.cameraController;
+    P.devReset('A'); this.live();
+    this.placeHandler(0, 8.5, 6);
+    const o = this.me.offense, ball = g.ball, M = this.me.model;
+    // drive right, crossover, explode left: ball never jumps, the move exits into motion, camera stays smooth
+    let maxBallStep = 0, maxCamAcc = 0, maxRootOff = 0, endSpeed = -1, minAfter = 9, endF = -1;
+    const pb = ball.position.clone(), pc = cam.camera.position.clone(), pv = new THREE.Vector3();
+    this.keyDown('KeyD');
+    for (let f = 0; f < 70; f++) {
+      if (f === 20) { this.keyDown('KeyE'); }
+      if (f === 21) { this.keyUp('KeyE'); this.keyUp('KeyD'); this.keyDown('KeyA'); }
+      const busy = !!o.dribble.currentMove;
+      this.step();
+      if (ball.mode !== 'free') maxBallStep = Math.max(maxBallStep, ball.position.distanceTo(pb));
+      pb.copy(ball.position);
+      const v = cam.camera.position.clone().sub(pc).multiplyScalar(60);
+      if (f > 2) maxCamAcc = Math.max(maxCamAcc, v.distanceTo(pv) * 60);
+      pv.copy(v); pc.copy(cam.camera.position);
+      maxRootOff = Math.max(maxRootOff, Math.hypot(M.root.position.x - o.position.x, M.root.position.z - o.position.z));
+      if (busy && !o.dribble.currentMove && endF < 0) { endF = f; endSpeed = o.locomotion.speed; }
+      if (endF >= 0 && f > endF && f - endF <= 6) minAfter = Math.min(minAfter, o.locomotion.speed);
+    }
+    this.keyUp('KeyA');
+    this.check('continuity: ball never jumps while dribbling (crossover at speed)', maxBallStep < 0.3, `max step ${(maxBallStep * 100).toFixed(1)} cm/frame`);
+    this.check('continuity: crossover exits straight into motion (no dead frame)', endF >= 0 && minAfter > 0.6 * endSpeed, `${endSpeed.toFixed(2)} -> min ${minAfter.toFixed(2)} m/s`);
+    this.check('continuity: camera follow has no jerks (cut + reversal)', maxCamAcc < 45, `max ${maxCamAcc.toFixed(1)} m/s²`);
+    this.check('continuity: drawn body stays on the gameplay root', maxRootOff < 0.065, `≤ ${(maxRootOff * 100).toFixed(1)} cm`);
+    // frame-rate independence: the damping is exact, and the camera follow matches at 30 / 144 fps
+    const runDamp = (fps) => { let x = 0, v = 0; for (let i = 0; i < fps; i++) [x, v] = ISO.Smooth.damp(x, v, 1, 10, 1 / fps); return x; };
+    const camAt = (fps) => {
+      const c = new ISO.CameraController(16 / 9), tgt = new THREE.Vector3(0, 0, 9);
+      c.frame(tgt, null, 0, false, 0); c.snap();
+      for (let i = 0; i < fps; i++) { tgt.x += 5 / fps; c.frame(tgt, null, 0, false, 1 / fps); c.update(1 / fps); }
+      return c.camera.position.clone();
+    };
+    const d30 = runDamp(30), d144 = runDamp(144), c30 = camAt(30), c144 = camAt(144);
+    this.check('continuity: smoothing is frame-rate independent (30 vs 144 fps)', Math.abs(d30 - d144) < 1e-9 && c30.distanceTo(c144) < 5 / 30, `damp Δ ${Math.abs(d30 - d144).toExponential(1)}, camera Δ ${(c30.distanceTo(c144) * 100).toFixed(1)} cm (< one 30-fps frame of target motion, ${(500 / 30).toFixed(1)} cm)`);
+  }
+
   run() {
     const g = this.g, P = this.P, rules = ISO.GAMEFLOW.rules, target = rules.targetScore;
     this.bot(false);
@@ -375,6 +416,9 @@ ISO.SelfTest = class {
 
     // ---- 6. Player Model V2 rig + faster release -----------------------------------
     this.modelChecks();
+
+    // ---- 7. motion continuity (Step 16.5) -----------------------------------------
+    this.continuityChecks();
 
     rules.targetScore = target;
     ISO.DEFENSE.steal.cpuChance = cpuChance;

@@ -17,6 +17,8 @@ ISO.CameraController = class {
     this.camera = new THREE.PerspectiveCamera(this.cfg.fov, aspect, 0.1, 200);
     this.focus = new THREE.Vector3(0, 0, 6.5);  // where we want to look (unsmoothed)
     this.current = this.focus.clone();          // smoothed focus
+    this.vel = new THREE.Vector3();             // its velocity (critically damped follow)
+    this.biasV = 0;
     this.yaw = 0;                               // 0 = behind the basket line, looking toward the baseline
     this.yawTarget = 0;
     this.bias = this.cfg.basketBias;            // how far the focus is pulled toward the rim
@@ -33,8 +35,9 @@ ISO.CameraController = class {
     const C = this.cfg;
     const f = this._f.copy(handler);
     if (matchup) f.lerp(matchup, C.defenderWeight);
-    const want = beaten && attack > 0.3 ? C.driveBasketBias : C.basketBias;
-    this.bias += (want - this.bias) * (dt > 0 ? 1 - Math.exp(-C.biasSmoothing * dt) : 1);
+    // basket emphasis grows with the drive (commitment), instead of switching
+    const want = C.basketBias + (C.driveBasketBias - C.basketBias) * (beaten ? Math.min(1, Math.max(0, (attack - 0.2) / 0.3)) : 0);
+    [this.bias, this.biasV] = dt > 0 ? ISO.Smooth.damp(this.bias, this.biasV, want, C.biasOmega, dt) : [want, 0];
     this._handler.copy(handler);
     this.setFocus(f);
   }
@@ -48,19 +51,27 @@ ISO.CameraController = class {
   snap() {
     this.yaw = this.yawTarget = this._wantYaw();
     this.current.copy(this._biasedFocus());
+    this.vel.set(0, 0, 0);
+    this.yawV = 0;
     this._apply();
   }
 
   update(dt) {
     const C = this.cfg;
-    const k = 1 - Math.exp(-C.smoothing * dt);   // frame-rate independent easing
-    this.current.lerp(this._biasedFocus(), k);
+    // Critically damped follow (exact for any frame rate): the camera's
+    // velocity changes smoothly, so a hard cut doesn't jerk it, and it still
+    // settles as fast as the old easing (same lag at running speed).
+    const t = this._biasedFocus();
+    for (const ax of ['x', 'y', 'z']) {
+      const r = ISO.Smooth.damp(this.current[ax], this.vel[ax], t[ax], C.followOmega, dt);
+      this.current[ax] = r[0]; this.vel[ax] = r[1];
+    }
     // yaw: eased and rate-limited (restrained, never a whip)
     this.yawTarget = this._wantYaw();
-    const err = this.yawTarget - this.yaw;
-    const step = err * (1 - Math.exp(-C.yawSmoothing * dt));
-    const max = C.yawRate * dt;
-    this.yaw += Math.max(-max, Math.min(max, step));
+    // critically damped as well, with the turn speed capped (restrained, never a whip)
+    const r = ISO.Smooth.damp(this.yaw, this.yawV || 0, this.yawTarget, C.yawOmega, dt);
+    this.yawV = Math.max(-C.yawRate, Math.min(C.yawRate, r[1]));
+    this.yaw = r[0];
     this._apply();
   }
 
