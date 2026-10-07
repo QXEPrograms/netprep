@@ -256,6 +256,17 @@ ISO.FinishSystem = class {
       } else {
         other.weight = 1 - smoothstep(tl.takeoff, tl.takeoff + 0.12, t);
       }
+    } else if (this._blocked()) {
+      // Step 18 (visual): the ball got knocked away — no follow-through as if
+      // it went up clean; both hands recoil toward the face and come down
+      // through the landing.
+      const u = smoothstep(0, 0.1, t - (this._relT ?? t));
+      this._world(loco, h * 0.16, 0.3, 1.5 + jumpY, this._tmp);
+      fin.target.lerp(this._tmp, u);
+      this._world(loco, -h * 0.2, 0.32, 1.4 + jumpY, this._tmp);
+      other.target.lerp(this._tmp, u);
+      fin.weight = 1 - smoothstep(tl.land - 0.05, tl.end, t);
+      other.weight = fin.weight * 0.85;
     } else {
       // Follow-through: the finishing arm stays up toward the rim (a dunking
       // hand comes back off the rim instead of hanging inside it).
@@ -280,13 +291,16 @@ ISO.FinishSystem = class {
     return { hands: this.hands, body: this.body, stance: this.t < this.tl.land ? 1 : 0 };
   }
 
+  // The ball this finish released was knocked away by a defender's hand.
+  _blocked() { return this.ballReleased && !!this.ball.blockedBy && this.ball.mode === ISO.Basketball.MODES.FREE; }
+
   getFinishPose() {
     if (!this.busy) return null;
     const tl = this.tl;
     return {
       kind: this.finishType, t: this.t, gather: tl.gather, takeoff: tl.takeoff, release: tl.release, land: tl.land, end: tl.end,
       jumpY: this.jumpHeight(this.t), lead: this.finishHand === 'right' ? 1 : -1, protected: this.protected,
-      released: this.ballReleased,
+      released: this.ballReleased, blocked: this._blocked(),
     };
   }
 
@@ -316,6 +330,7 @@ ISO.FinishSystem = class {
     this.releasePosition.copy(b.position);
     if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
     this.ballReleased = true;
+    this._relT = this.t;
     this.shotReleased = true;
     this.shotCount++;
     return true;
@@ -411,6 +426,7 @@ ISO.FinishSystem = class {
     this.releasePosition.copy(pos);
     if (!this._tookOff) this.releaseFeet.set(loco.position.x, 0, loco.position.z);
     this.ballReleased = true;
+    this._relT = this.t;
     this.shotReleased = true;
     this.shotCount++;
   }

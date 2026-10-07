@@ -349,7 +349,8 @@ ISO.ShootingSystem = class {
     if (!this.isShooting) return null;
     const t = this.shotTime;
     const pose = { t, gatherEnd: s.gatherTime, takeoff: s.takeoff, land: s.land, end: s.end, jumpY: this.jumpHeight(t),
-      releasedAt: this.ballReleased ? this._releaseT : null };
+      releasedAt: this.ballReleased ? this._releaseT : null,
+      blocked: this.ballReleased && !!this.ball.blockedBy && this.ball.mode === ISO.Basketball.MODES.FREE };
     if (this.pre > 0 && t < 0.12) pose.hop = { u: Math.min(1, this.t / this.pre), side: this._hopSide };
     return pose;
   }
@@ -519,6 +520,16 @@ ISO.ShootingSystem = class {
       }
       shoot.weight = 1;
       guide.weight = 1;
+    } else if (this.ball.blockedBy && this.ball.mode === ISO.Basketball.MODES.FREE) {
+      // Step 18 (visual): blocked — the shooting hand recoils instead of
+      // holding a follow-through for a shot that got swatted.
+      const u = smoothstep(this._releaseT, this._releaseT + 0.1, t);
+      this._toWorld(loco, 0.14, 0.24, 1.55 + jumpY, this._tmp);
+      shoot.target.lerp(this._tmp, u);
+      this._toWorld(loco, -0.16, 0.26, 1.45 + jumpY, this._tmp);
+      guide.target.lerp(this._tmp, u);
+      shoot.weight = 1 - smoothstep(s.land + 0.08, s.end, t);
+      guide.weight = shoot.weight * 0.8;
     } else {
       // Follow-through: shooting arm stays up and out toward the rim, then relaxes
       // after landing. Guide hand comes off the ball.

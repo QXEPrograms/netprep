@@ -199,6 +199,7 @@ ISO.PlayerController = class {
       handShift: this.bodyPose ? this.bodyPose.out.handShift || 0 : 0,
       lateralSpeed: -Math.cos(l.facing) * l.velocity.x + Math.sin(l.facing) * l.velocity.z,
       pressure: this._pressure(),
+      opponent: l.matchup ? l.matchup.position : null,     // (visual: contact posture)
     };
   }
 };

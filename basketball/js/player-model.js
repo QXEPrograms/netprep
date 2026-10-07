@@ -136,6 +136,7 @@ ISO.PlayerModel = class {
     const po = this._rootInertia.update(state.position, dt), yo = this._yawInertia.update(state.facing, dt)[0];
     this.root.position.set(state.position.x + po[0], state.position.y + po[1], state.position.z + po[2]);
     this._gameSpeed = state.velocity ? Math.hypot(state.velocity.x, state.velocity.z) : state.speed || 0;
+    this._pressureIn = pose.loco ? state.pressure || 0 : 0;
     this.root.rotation.set(0, state.facing + yo, 0);
     // bones the layers below only add to start from rest every frame
     this.body.rotation.set(0, 0, 0);
@@ -180,14 +181,22 @@ ISO.PlayerModel = class {
     const extra = pose.dribble ? pose.dribble.body : NO_BODY;
     const strideMul = extra.stride ?? 1;     // < 1 = short, choppy steps (spin, behind-the-back)
     const latA = lp ? this.latAmt : 0, backA = lp ? this.backAmt : 0;
-    const swing = (0.55 + 0.35 * sprintAmt) * s * strideMul * (1 - latA);
-    const flex = Math.max(0, 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * (extra.crouch + (lp ? lp.crouch : 0)));
+    // Step 18 body language (visual only, ISO.ANIM): an athletic base at
+    // size-up speed, a lower retreat, the knees catching a hard stop, a load
+    // into the first push of a drive.
+    const AN = ISO.ANIM, ball = lp && this.stance > 0.01 ? this.stance : 0;
+    const acc = this._bodyAccel(dt, state);
+    this._spring(this, '_brake', lp ? clamp(acc.brake / AN.brake.decel, 0, 1) : 0, AN.brake.omega, dt);
+    this._spring(this, '_push', lp ? clamp(acc.push / AN.driveLoad.accel, 0, 1) * clamp(1 - s, 0, 1) : 0, 20, dt);
+    const swing = (0.55 + 0.35 * sprintAmt) * s * strideMul * (1 - latA) * (1 - AN.base.retreatStep * backA * ball);
+    const flex = Math.max(0, 0.1 * (1 - s) + 0.3 * this.stance * (1 - 0.4 * s) + 0.14 * (extra.crouch + (lp ? lp.crouch : 0))
+      + ball * (AN.base.flex * (1 - s) + AN.base.retreatFlex * backA) + AN.brake.flex * this._brake + AN.driveLoad.flex * this._push);
 
     // Hips can shift sideways (weight shift); the legs angle back so the feet
     // stay planted. sway > 0 = toward the character's right (local -x).
     const sway = (extra.sway || 0) + (lp ? lp.sway : 0);
     const legLean = sway / 0.85;
-    const wide = 0.05 * Math.abs(extra.crouch || 0);   // wider base when dipping
+    const wide = 0.05 * Math.abs(extra.crouch || 0) + AN.base.width * ball * (1 - s);   // wider base when dipping / set
 
     // Legs: opposite phase; knee bends most while the leg swings forward.
     const spread = F ? F.lateralSpread : 0.22;
@@ -230,7 +239,7 @@ ISO.PlayerModel = class {
     this._spring(this, 'lean', targetLean, 20, dt);
     const targetRoll = Math.max(-0.25, Math.min(0.25, -state.turnSpeed * 0.04 * s)) * (extra.turnRoll ?? 1) * (lp ? 0.4 : 1);
     this._spring(this, 'roll', targetRoll, 20, dt);
-    this.torso.rotation.x = this.lean + 0.06 * (1 - s) + (lp ? lp.pitch : 0);
+    this.torso.rotation.x = this.lean + 0.06 * (1 - s) + (lp ? lp.pitch : 0) + AN.base.retreatChest * backA * ball;
     this.body.rotation.z = this.roll + extra.roll + (lp ? lp.roll : 0);
     // Movement lean pivots near the hips (not the feet): the feet push out to
     // the side and the torso stays over the physical body.
@@ -248,6 +257,8 @@ ISO.PlayerModel = class {
     if (pose.defense) this._poseDefense(dt, pose.defense);
     this._crossfade(dt, pose.defense ? 'defense' : pose.finish ? 'finish' : pose.shot ? (pose.shot.fake ? 'fake' : 'shot') : pose.stepBack ? 'stepBack' : pose.pass ? 'pass' : 'base');
     this._spreadSpine();
+    this._poseAlive(dt, state, pose, ball);
+    this._poseContact(dt, state, pose);
     this._poseBalance(dt, pose.balance || null);
     this._poseWrists(dt, pose);
     this._poseInertia.apply(dt, this._exact ? EXACT : null);
@@ -258,6 +269,58 @@ ISO.PlayerModel = class {
     this._poseBalanceArms();
     this._armInertia.apply(dt, this._armGate);
   }
+
+  // Gameplay acceleration of the root, split into braking (against the motion)
+  // and pushing (along the facing): visual cues only.
+  _bodyAccel(dt, state) {
+    const out = this._acc || (this._acc = { brake: 0, push: 0 });
+    const v = state.velocity, pv = this._pv || (this._pv = new THREE.Vector3().copy(v));
+    if (dt <= 0) { pv.copy(v); out.brake = out.push = 0; return out; }
+    const ax = (v.x - pv.x) / dt, az = (v.z - pv.z) / dt, sp = Math.hypot(v.x, v.z);
+    out.brake = sp > 0.4 ? Math.max(0, -(ax * v.x + az * v.z) / sp) : 0;
+    out.push = Math.max(0, ax * Math.sin(state.facing) + az * Math.cos(state.facing));
+    pv.copy(v);
+    return out;
+  }
+
+  // Alive while standing (Step 18): breathing in the chest, a slow weight
+  // shift in the hips, and the dribbling shoulder riding the ball's push.
+  _poseAlive(dt, state, pose, ball) {
+    if (this._exactNow(pose)) return;      // hands that are gameplay colliders: exact pose only
+    const A = ISO.ANIM.idle, still = ball * clamp(1 - this.stride * 1.6, 0, 1);
+    this.chest.rotation.x += A.breathe * Math.sin(this.time * 2 * Math.PI * A.breatheHz) * (0.5 + 0.5 * still);
+    if (still > 0.01) this.body.position.x += A.shift * still * Math.sin(this.time * 2 * Math.PI * A.shiftHz);
+    if (ball > 0.01 && this.ball && pose.dribble && !pose.shot && !pose.finish && !pose.pass) {
+      const dr = pose.dribble.hands.find((h) => h.weight > 0.5);
+      if (dr) {
+        const arm = this.arms.find((a) => a.side === -dr.side);
+        const push = clamp(1 - (this.ball.position.y - 0.2) / 0.8, 0, 1);    // ball low = the hand just pushed it down
+        arm.clavicle.rotation.z += -arm.side * A.dribbleShoulder * push * ball;
+      }
+    }
+  }
+
+  // Contact posture (Step 18): chest to chest with the matchup the forward
+  // lean gives way (no leaning through him) and the shoulders turn a little
+  // off the contact. Not while this body's hands are gameplay colliders.
+  _poseContact(dt, state, pose) {
+    const C = ISO.ANIM.contact, o = state.opponent;
+    let give = 0, side = 0;
+    if (o && !this._exactNow(pose)) {
+      const dx = o.x - state.position.x, dz = o.z - state.position.z, gap = Math.hypot(dx, dz);
+      const f = state.facing, fwd = (dx * Math.sin(f) + dz * Math.cos(f)) / (gap || 1);
+      if (fwd > 0.3) { give = (1 - smoothstep(C.near, C.far, gap)) * smoothstep(0.3, 0.8, fwd); side = Math.sign(-dx * Math.cos(f) + dz * Math.sin(f)) || 1; }
+    }
+    this._spring(this, '_contact', give, 20, dt);
+    const g = this._contact;
+    if (g < 0.002) return;
+    const keep = lerp(1, C.leanKeep, g);
+    for (const b of [this.torso, this.spineUpper, this.chest]) if (b.rotation.x > 0) b.rotation.x *= keep;
+    this.chest.rotation.y += -side * C.shoulder * g;
+    this.spineUpper.rotation.y += -side * C.shoulder * 0.5 * g;
+  }
+
+  _exactNow(pose) { return !!(pose.handsLive || (pose.balance && pose.balance.reach)); }
 
   // World position of a hand's palm centre (side: +1 character right, -1 left),
   // from the final hand bone: the hand colliders and the ball contact use this.
@@ -296,6 +359,9 @@ ISO.PlayerModel = class {
     const speed = Math.hypot(vel.x, vel.z);
     if (W < 0.003) { for (const leg of this.legs) if (leg.st) leg.st.init = false; return false; }
     const A = this.rig.dims.ankleY;
+    // foot roll (Step 18): forward-ness of the travel in the body frame
+    const FR = ISO.ANIM.footRoll, fy = this.root.rotation.y;
+    const fwdness = speed > 0.3 ? clamp((vel.x * Math.sin(fy) + vel.z * Math.cos(fy)) / Math.max(speed, 0.8), -1, 1) : 0;
     let moved = false;
     for (let i = 0; i < 2; i++) {
       const leg = this.legs[i], other = this.legs[1 - i];
@@ -322,6 +388,7 @@ ISO.PlayerModel = class {
         S.land.set(home.x + vel.x * (S.T + 0.06), 0, home.z + vel.z * (S.T + 0.06));
       }
       const tgt = v;
+      let roll = 0;     // + heel up (toes down), - toes up
       if (S.swing) {
         S.t += dt;
         const u = Math.min(1, S.t / S.T), e = u * u * (3 - 2 * u);
@@ -329,8 +396,19 @@ ISO.PlayerModel = class {
         const lead = S.T * (1 - u) + 0.06;   // land ahead: the body then passes over the foot
         const ax = home.x + vel.x * lead, az = home.z + vel.z * lead;
         tgt.set(S.from.x + (ax - S.from.x) * e, floor + A + (0.05 + 0.012 * speed) * Math.sin(Math.PI * u), S.from.z + (az - S.from.z) * e);
+        // toe-off as it leaves, toes up into a heel strike as it lands (forward);
+        // a backpedal lands on the ball of the foot
+        roll = fwdness > 0 ? fwdness * (FR.toeOff * (1 - smoothstep(0, 0.4, u)) - FR.heelStrike * bellCurve(u, 0.55, 1.0))
+          : -fwdness * (FR.toeOff * 0.6 * bellCurve(u, 0.55, 1.0));
         if (u >= 1) { S.swing = false; S.pos.set(tgt.x, floor + A, tgt.z); }
-      } else tgt.copy(S.pos);
+      } else {
+        tgt.copy(S.pos);
+        // a planted rear foot peels its heel as the body passes over it
+        const behind = (hip.x - S.pos.x) * Math.sin(fy) + (hip.z - S.pos.z) * Math.cos(fy);
+        if (fwdness > 0 && behind > 0.05) roll = FR.peel * smoothstep(0.5, 1, S.need || 0) * fwdness;
+      }
+      // pivot on the ball of the foot (heel up) or on the heel (toes up)
+      if (roll !== 0) tgt.y += (roll > 0 ? FR.toeLen : FR.heelLen) * Math.sin(Math.abs(roll)) * W;
       tgt.y += homeLift;                                                // keep keyed lifts (jab step)
       // blend with the procedural foot while fading in/out
       if (W < 1) tgt.lerp(home, 1 - W);
@@ -338,6 +416,7 @@ ISO.PlayerModel = class {
       // sits on its sole); blended with the procedural foot while fading
       const footQ = leg.ankle.getWorldQuaternion(this._qLock || (this._qLock = new THREE.Quaternion()));
       footQ.slerp(this.root.quaternion, W);
+      if (roll !== 0) footQ.multiply(this._q.setFromAxisAngle(AXIS_X, roll * W));
       this._solveLegIK(leg, tgt);
       leg.knee.updateMatrixWorld(true);
       leg.ankle.quaternion.copy(leg.knee.getWorldQuaternion(this._q).invert().multiply(footQ));
@@ -583,11 +662,11 @@ ISO.PlayerModel = class {
   _poseWrists(dt, pose) {
     let want = 0;
     const sh = pose.shot;
-    if (sh && !sh.fake && sh.releasedAt !== null && sh.releasedAt !== undefined) {
+    if (sh && !sh.fake && !sh.blocked && sh.releasedAt !== null && sh.releasedAt !== undefined) {
       this._relClock = (this._relClock ?? 0) + dt;
       want = (1 - smoothstep(sh.land + 0.05, sh.end, sh.t)) * smoothstep(0, 0.08, this._relClock);
     } else this._relClock = 0;
-    if (pose.finish && pose.finish.released) want = Math.max(want, 0.6 * (1 - smoothstep(pose.finish.land, pose.finish.end, pose.finish.t)));
+    if (pose.finish && pose.finish.released && !pose.finish.blocked) want = Math.max(want, 0.6 * (1 - smoothstep(pose.finish.land, pose.finish.end, pose.finish.t)));
     this._spring(this, '_wrist', want, 45, dt);
     if (this._wrist < 0.002) return;
     const shooting = this.arms[0];        // character right
@@ -861,6 +940,9 @@ ISO.PlayerModel = class {
   _poseArms(dt, dribble) {
     const st = this.stance;
     const k = dt > 0 ? 1 - Math.exp(-24 * dt) : 1;
+    const OA = ISO.ANIM.offArm;
+    this._spring(this, '_protect', this._pressureIn * (this.stance > 0.5 ? 1 : 0), 14, dt);
+    const pr = clamp(this._protect, 0, 1);
     for (const arm of this.arms) {
       // Character right (+1) is local -x, i.e. arm.side === -1.
       const req = dribble ? dribble.hands.find((h) => h.side === -arm.side) : null;
@@ -871,10 +953,12 @@ ISO.PlayerModel = class {
       // hand on (or reaching for) the ball: the IK must stay exact
       arm._onBall = !!(req && want > 0.5 && this.ball && arm.ikTarget.distanceTo(this.ball.position) < 0.35);
 
-      // Free pose: guard arm out in front, blended in with the dribble stance.
-      arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, -0.55, st);
-      arm.shoulder.rotation.z = lerp(arm.shoulder.rotation.z, arm.side * 0.32, st);
-      arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, -1.15, st);
+      // Free pose: guard arm out in front, blended in with the dribble stance;
+      // with the defender right there it becomes an arm bar shielding the
+      // ball (Step 18, visual: the steal rules are unchanged).
+      arm.shoulder.rotation.x = lerp(arm.shoulder.rotation.x, lerp(OA.guardPitch, OA.barPitch, pr) + 0.03 * Math.sin(this.time * 1.7 + arm.side), st);
+      arm.shoulder.rotation.z = lerp(arm.shoulder.rotation.z, arm.side * lerp(OA.guardOut, OA.barOut, pr), st);
+      arm.elbow.rotation.x = lerp(arm.elbow.rotation.x, lerp(OA.guardElbow, OA.barElbow, pr), st);
       // Shrug: when the target is out of reach above the shoulder, lift the
       // shoulder toward it a little (how real players reach for the rim).
       let shrugWant = 0;
@@ -963,6 +1047,7 @@ ISO.PlayerModel = class {
 };
 
 const MAX_SHRUG = 0.1;
+const AXIS_X = new THREE.Vector3(1, 0, 0);
 const EXACT = () => true;     // pose-inertia gate: draw every bone exactly as posed
 // Steal reach through the body (tuned so the reach covers the same ground as
 // the Step 15B reach did: same contact rates on the steal sweeps).

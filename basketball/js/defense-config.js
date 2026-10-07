@@ -150,6 +150,11 @@ ISO.DEFENSE = {
     // (The arm IK still stops at the real arm length: no stretching.)
     aimUpFinish: 0.55,
     anticipateFinish: 0.08,
+    // Step 18 (visual only — see defender._pose): hands up with no shot in the
+    // air keeps the elbows soft; a shot in the rim's protected phase is aimed
+    // short (a late leap reads as late, never as a swat the rules ignore)
+    handsUpReach: 0.82,
+    lateShort: 0.3,
   },
 
   // ---- hand colliders & physical blocks ---------------------------------------

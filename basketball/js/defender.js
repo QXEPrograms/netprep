@@ -379,6 +379,7 @@ ISO.DefenderController = class {
       speed: L.mode === 'run' ? L.speed : Math.min(L.speed, 1.2),
       runSpeed: 5, sprintSpeed: 7.2, sprinting: false,
       turnSpeed: L.turnSpeed,
+      opponent: this.opponent ? this.opponent.position : null,   // (visual: contact posture)
     };
   }
 
@@ -407,6 +408,14 @@ ISO.DefenderController = class {
       : !!(fi && fi.busy && !fi.ballReleased);
     if (!free) aim.y += finish ? A.anticipateFinish : A.anticipate;
     const aimUp = finish ? A.aimUpFinish : free ? A.aimUpFree : A.aimUp;
+    // Step 18 (visual): a shot already in the rim's protected phase can't be
+    // blocked — the hand aims short of it so a late leap reads as a late miss
+    // instead of a hand drawn through the ball (the rule itself is unchanged)
+    if (free && this.ball.flightKind === 'shot' && ISO.BlockSystem.protectedPhase(this.ball)) aim.y -= A.lateShort;
+    // ...and with no shot coming (hands up on a dribbler) the elbows stay
+    // soft instead of two rigid arms; any shot / jump uses the full reach
+    const shotOn = free ? this.ball.flightKind === 'shot' : !!((fi && fi.busy) || (this.opponent && this.opponent.shooting && this.opponent.shooting.busy));
+    const armLen = shotOn || L.jumpState !== 'ground' ? 0.95 : A.handsUpReach;
     // Which hand is on the ball side blends over ~60 ms instead of flipping
     // the instant the ball crosses the defender's nose (Step 16.5: the hands
     // used to jump 28 cm in one frame there).
@@ -430,7 +439,7 @@ ISO.DefenderController = class {
           const dir = this._dir.copy(aim).sub(sh).normalize();
           dir.y += aimUp; dir.normalize();
           // the arm swings toward that direction at a hand's speed, not instantly
-          const want = this._tmp2.copy(sh).addScaledVector(dir, 0.95);
+          const want = this._tmp2.copy(sh).addScaledVector(dir, armLen);
           if (!h.contestReach || raise < 0.05 || dt === 0) h.contestReach = want.clone();
           else {
             const step = this._tmp.copy(want).sub(h.contestReach), len = step.length(), max = A.handSpeed * dt;
@@ -444,6 +453,11 @@ ISO.DefenderController = class {
       // handler (then they stay on targets that keep them out of his chest)
       h.weight = run ? (this._closeToOpponent ? 1 : 0) : 1;
     }
+    // A won steal (Step 18, visual): the ball is popping into this defender's
+    // hands — both hands go to it and secure it (the play is already dead).
+    if (this.reach && this.reach.won && free && this.ball.flightKind === 'steal') {
+      for (const h of this.hands) { h.target.copy(ball).addScaledVector(this._right, h.side * 0.11); h.weight = 1; }
+    } else
     // Steal reach: the reach hand goes at the ball (a little through it); the
     // arm IK stops at real arm length, so far balls stay out of reach.
     if (this.reach) {
