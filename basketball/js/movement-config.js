@@ -126,6 +126,7 @@ ISO.MOVEMENT = {
     smoothing: 5,           // (Step 14 first-order follow rate, kept for reference)
     followOmega: 12,        // critically damped follow (1/s): same lag as smoothing 5 at a steady run (2/omega = 0.2 s), no jerk on cuts
     defenderWeight: 0.3,    // frame the matchup, not just the ball handler
+    deadZone: 0.3,          // m: size-up shuffles inside this don't move the camera (Step 17; was 0)
     basketBias: 0.3,        // pull toward the rim (the basket stays in the shot)
     driveBasketBias: 0.42,  // ...more once you've beaten your man and are attacking
     biasSmoothing: 2.5,

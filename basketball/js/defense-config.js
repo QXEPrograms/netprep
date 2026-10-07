@@ -144,6 +144,12 @@ ISO.DEFENSE = {
     aimUpFree: 1.4,        // ...and still mostly up once it's in the air (no chasing the ball)
     handSpeed: 7,          // m/s the contest hand can swing to a new direction
     anticipate: 0.35,      // aim this far above a ball that is still in the shooter's hands
+    // Step 17: against a FINISH (layup / dunk / floater coming at the rim) the
+    // contest arm reaches at the ball instead of straight up — the jumper's
+    // vertical contest kept the hand 15-60 cm off a rising layup or dunk.
+    // (The arm IK still stops at the real arm length: no stretching.)
+    aimUpFinish: 0.55,
+    anticipateFinish: 0.08,
   },
 
   // ---- hand colliders & physical blocks ---------------------------------------
@@ -179,7 +185,10 @@ ISO.DEFENSE = {
     exposureFar: 0.74,     // ...this far out = fully exposed (pushed ahead, crossing over)
     moveExposure: 0.3,     // + while the ball crosses between hands (crossover, behind-back, in-and-out)
     driveExposure: 0.15,   // + on a committed drive (ball pushed ahead)
-    cleanExposure: 0.62,   // contact at or above this (and a balanced defender) = clean steal
+    cleanExposure: 0.55,   // contact at or above this (and a balanced defender) = clean steal
+                           // (Step 17: 0.62 -> 0.55. Measured sweep 0.62/0.60/0.58/0.55/0.52: an exposed
+                           //  ball-side drive / slide / crossover read turns more contacts into clean
+                           //  steals; protected and stationary dribbles stay at exposure ~0.13: no change)
     cleanBalance: 0.45,
     deflectExposure: 0.3,  // below this a touch is a harmless glance
     cleanBallSpeed: 3.2,   // m/s the ball pops into the stealer's hands

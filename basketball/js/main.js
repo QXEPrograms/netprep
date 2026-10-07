@@ -100,6 +100,7 @@ ISO.Game = class {
     this.events.on('blockOccurred', (e) => this.ui.showBlock(e));
     this.events.on('gameWon', (e) => this.ui.showWin(e));
     this.events.on('steal', (e) => this.ui.showSteal(e, this.localPlayer.id));
+    this.events.on('shotClockViolation', (e) => this.ui.showShotClockViolation(e));
     this.events.on('ankleBreak', (e) => { if (e.reactionLevel >= 2) this.ui.showAnkleBreaker(e); });
     if (ISO.CONFIG.debugPhysics) {
       const hud = document.getElementById('hud');
@@ -190,6 +191,7 @@ ISO.Game = class {
   step(dt) {
     const R = this.roster, P = this.possession;
     this.events.tick(dt);
+    P.tickClock(dt);                       // shot clock (live play only; may end the possession)
     P.applyFreeze();                       // input off outside live play
     const offense = R.players.filter((p) => p.role === 'offense');
     const defense = R.players.filter((p) => p.role === 'defense');

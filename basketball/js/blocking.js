@@ -97,7 +97,7 @@ ISO.BlockSystem = class {
   // rim phase (see protectedPhase). The hand still has to physically meet it.
   blockable() {
     const b = this.ball, w = this.world;
-    return b.mode === MODES().FREE && b.flightKind === 'shot' && b.freeTime < this.cfg.maxShotAge &&
+    return b.mode === MODES().FREE && b.flightKind === 'shot' && !b.deadShot && b.freeTime < this.cfg.maxShotAge &&
       !(w && (w.shotTouchedRim || w.shotTouchedBackboard)) && !ISO.BlockSystem.protectedPhase(b);
   }
 
@@ -118,6 +118,7 @@ ISO.BlockSystem = class {
   // Role change / possession reset: no live hands, no block state.
   clear() {
     for (const h of this.hands) h.clear();
+    this._ballPrev = this._ballPrevNext = null;
     this.active = false;
     this.blockOccurred = false;
     this.handBallDistance = Infinity;
@@ -138,25 +139,50 @@ ISO.BlockSystem = class {
     this.active = this.blockable() && (handsActive[0] || handsActive[1]);
     const b = this.ball.position, r = this.ball.radius;
     this.handBallDistance = Math.min(...this.hands.map((h) => h.cur.distanceTo(b) - h.radius - r));
+    // where the (held) ball was at the previous sync, for the swept check
+    this._ballPrev = this._ballPrevNext || null;
+    (this._ballPrevNext || (this._ballPrevNext = new THREE.Vector3())).copy(b);
   }
 
-  // The release portion: the ball is still in the shooter's hands but is
-  // leaving them (jump-shot arm extension / the last moment of a finish). A
-  // hand that physically touches it here knocks it loose; the ball physics
-  // then resolves the contact like any other. Never during the gather or
-  // dribble (that would be a strip — not part of this system).
+  // Closest approach of a hand and the ball over the last frame (both moving
+  // linearly from their previous to their current positions).
+  _sweptGap(h, ballPrev, ballCur) {
+    const r0 = this._t.copy(h.prev).sub(ballPrev);
+    const dv = this._vr.copy(h.cur).sub(h.prev).sub(this._vb.copy(ballCur).sub(ballPrev));
+    const vv = dv.lengthSq();
+    const t = vv > 1e-9 ? Math.max(0, Math.min(1, -r0.dot(dv) / vv)) : 1;
+    return r0.addScaledVector(dv, t).length();
+  }
+
+  // The held part of a shot: a jump shot's arm extension, or a finish from the
+  // lift into its takeoff until the release (Step 17: was only its last
+  // 0.12 s — layups and dunks were nearly unblockable while still in the
+  // hands). A hand that physically touches the ball here knocks it loose; the
+  // ball physics then resolves the contact like any other. Swept over the
+  // frame (hand path vs ball path), so a fast hand can't pass through it.
+  // Never during the gather on the floor or the dribble (that is a steal).
   checkHeld(shooter) {
     const b = this.ball;
     if (b.mode === MODES().FREE) return false;
     const sh = shooter.shooting, fi = shooter.finishing;
-    const sys = sh.inReleaseWindow ? sh : fi.inReleaseWindow ? fi : null;
+    const sys = sh.inReleaseWindow ? sh : fi.inBlockWindow ? fi : null;
     if (!sys) return false;
     // a ball already being put down through the rim can't be knocked loose
     const H = ISO.CONFIG.hoop, K = ISO.DEFENSE.block;
     if (Math.hypot(b.position.x, b.position.z - H.centerZ) < K.dunkLockRadius && b.position.y > H.rimHeight - 0.1) return false;
+    // a finish: only once the ball is up in it, against a defender in the air
+    // (rising or near the top of the jump: one who went up early is already
+    //  falling away when the ball comes up — patience beats him)
+    const DL = this.defender.locomotion, O = ISO.OFFENSE;
+    const legacy = !!O.finishBlockLegacy;     // ?tuning=16.5: none of these rules
+    if (sys === fi && !legacy && (b.position.y < O.finishBlockMinHeight || DL.jumpState !== 'air' || DL.verticalVelocity < -O.finishBlockFallSpeed)) return false;
+    const bp = this._ballPrev || b.position;
     for (const h of this.hands) {
       if (!h.active) continue;
-      if (h.cur.distanceTo(b.position) < b.radius + h.radius) {
+      // ...meeting it from above: a defender who jumped early is coming down,
+      // his hands drop under the rising ball and the finisher goes up past him
+      if (sys === fi && !legacy && h.cur.y < b.position.y - ISO.OFFENSE.finishBlockBelow) continue;
+      if (this._sweptGap(h, bp, b.position) < b.radius + h.radius) {
         this.knockedLooseCount = (this.knockedLooseCount || 0) + 1;
         if (!sys.knockLoose(shooter.locomotion)) return false;
         // It is a block at the release: attribute it like one.

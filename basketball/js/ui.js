@@ -46,7 +46,19 @@ ISO.UI = class {
       if (i === 0) box.append(dot, label, value); else box.append(value, label, dot);
       this.scoreboard.append(box);
       this.teamEls[id] = { box, value, score: 0 };
+      // Shot clock (Step 17): between the two teams (after the only one in practice).
+      if (i === 0 || teamIds.length === 1) {
+        this.clockEl = el('div', 'scoreboard__clock');
+        const cl = el('div', 'scoreboard__clock-label');
+        cl.textContent = 'SHOT CLOCK';
+        this.clockValue = el('div', 'scoreboard__clock-value');
+        this.clockValue.textContent = '12';
+        this.clockEl.append(cl, this.clockValue);
+        if (ISO.GAMEFLOW.shotClock && ISO.GAMEFLOW.shotClock.enabled === false) this.clockEl.style.display = 'none';
+        this.scoreboard.append(this.clockEl);
+      }
     });
+    this._clockText = null;
 
     // Possession: who has the ball now, and the quick fade that hides resets.
     this.banner = el('div', 'possession-banner');
@@ -200,6 +212,17 @@ ISO.UI = class {
 
   _updatePossession(P) {
     this.fadeEl.style.opacity = P.fade > 0.001 ? P.fade.toFixed(3) : '0';
+    // Shot clock: display only (the possession system owns the time).
+    const C = P.shotClock;
+    if (C && this.clockValue) {
+      const txt = C.display;
+      if (txt !== this._clockText) {
+        this._clockText = txt;
+        this.clockValue.textContent = txt;
+        this.clockEl.classList.toggle('is-low', C.remaining < ISO.GAMEFLOW.shotClock.tenthsBelow);
+        this.clockEl.classList.toggle('is-zero', C.remaining <= 0);
+      }
+    }
     for (const id in this.teamEls) this.teamEls[id].box.classList.toggle('has-ball', P.offenseTeamId === id);
     if (P.possessionNumber !== this._possNum) {
       const first = this._possNum === null;
@@ -264,6 +287,11 @@ ISO.UI = class {
   showSteal(e, localId) {
     const mine = e.defenderPlayerId === localId;
     this._showFeedback('STEAL!', e.kind === 'deflection' ? 'POKED AWAY' : 'PICKED', mine ? 'perfect' : 'bad');
+  }
+
+  // The shot clock ran out before a release (shotClockViolation event).
+  showShotClockViolation(e) {
+    this._showFeedback('SHOT CLOCK', 'VIOLATION', 'bad');
   }
 
   // ANKLE BREAKER (from the ankleBreak event, major stagger or fall only).

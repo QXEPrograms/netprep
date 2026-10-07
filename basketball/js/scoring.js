@@ -84,7 +84,10 @@ ISO.ScoringSystem = class {
     this.releasedThisFrame = null;
     const list = typeof this.shooters === 'function' ? this.shooters() : this.shooters;
     const sh = list.find((s) => s.system && s.system.shotReleased);
-    if (sh) this._release(sh);
+    // (acceptRelease: the possession's say — e.g. a ball let go after the
+    //  shot clock hit zero is not a shot attempt at all)
+    if (sh && (!this.acceptRelease || this.acceptRelease(sh))) this._release(sh);
+    else if (sh) { this.ignoredReleases = (this.ignoredReleases || 0) + 1; this.ball.deadShot = true; if (this.events) this.events.emit('shotIgnored', { shooterPlayerId: sh.playerId, reason: 'SHOT_CLOCK' }); }
 
     const p = this.pending;
     if (!p) return;

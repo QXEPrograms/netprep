@@ -19,9 +19,9 @@ ISO.GAMEFLOW = {
   // ---- pace after a shot -------------------------------------------------------
   // The physical result plays out for this long before the transition starts.
   // Pickup pace: a short beat to read the result, then straight on.
-  makeResetDelay: 0.85,   // after the basket is detected (ball drops through the net)
+  makeResetDelay: 0.7,    // after the basket is detected (ball drops through the net) (Step 17: 0.85)
   missResetDelay: 0.6,    // after the miss is confirmed (bounce / fall away)
-  blockResetDelay: 0.8,   // after a blocked shot is confirmed a miss (see the deflection)
+  blockResetDelay: 0.7,   // after a blocked shot is confirmed a miss (see the deflection) (Step 17: 0.8)
   // The transition itself: a quick fade hides the reset, then a short settle
   // with the ball already in the new ball handler's hands before input is live.
   useFade: true,
@@ -29,6 +29,17 @@ ISO.GAMEFLOW = {
   fadeIn: 0.2,
   startDelay: 0.3,        // POSSESSION_START: players set, ball live in the dribble, input off
   get transitionDuration() { return this.fadeOut + this.startDelay; },
+
+  // ---- shot clock (Step 17) -----------------------------------------------------
+  // Quick half-court possessions, first to 11: 12 s is enough to size up,
+  // probe, make a move or two and get a shot off — not to dribble forever.
+  // Runs only while LIVE (never during results, fades, resets or the check).
+  shotClock: {
+    enabled: true,           // (?tuning=16.5 turns it off for comparison)
+    duration: 12.0,
+    tenthsBelow: 5,          // the display shows tenths under this many seconds
+    violationResetDelay: 0.7, // the violation reads this long before the transition
+  },
 
   // ---- when is a miss a miss ------------------------------------------------------
   // A shot can only score by coming DOWN through the rim from above. Once the

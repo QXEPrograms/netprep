@@ -400,7 +400,13 @@ ISO.DefenderController = class {
     // the hand can never stretch to the ball — it only points at it.
     const ball = this.ball.position;
     const aim = this._aim.copy(ball);
-    if (this.ball.mode !== ISO.Basketball.MODES.FREE) aim.y += A.anticipate;
+    const free = this.ball.mode === ISO.Basketball.MODES.FREE;
+    // a finish at the rim (in the hands, or just released): reach at the ball
+    const fi = this.opponent && this.opponent.finishing;
+    const finish = ISO.OFFENSE.finishBlockLegacy ? false : free ? (this.ball.flightKind === 'shot' && /^(layup|dunk|floater)$/.test(this.ball.shotKind) && this.ball.freeTime < 0.6)
+      : !!(fi && fi.busy && !fi.ballReleased);
+    if (!free) aim.y += finish ? A.anticipateFinish : A.anticipate;
+    const aimUp = finish ? A.aimUpFinish : free ? A.aimUpFree : A.aimUp;
     // Which hand is on the ball side blends over ~60 ms instead of flipping
     // the instant the ball crosses the defender's nose (Step 16.5: the hands
     // used to jump 28 cm in one frame there).
@@ -422,7 +428,7 @@ ISO.DefenderController = class {
         wall.y = sh.y + 0.3;
         if (sw > 0.01) {
           const dir = this._dir.copy(aim).sub(sh).normalize();
-          dir.y += this.ball.mode === ISO.Basketball.MODES.FREE ? A.aimUpFree : A.aimUp; dir.normalize();
+          dir.y += aimUp; dir.normalize();
           // the arm swings toward that direction at a hand's speed, not instantly
           const want = this._tmp2.copy(sh).addScaledVector(dir, 0.95);
           if (!h.contestReach || raise < 0.05 || dt === 0) h.contestReach = want.clone();

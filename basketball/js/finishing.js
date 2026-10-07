@@ -296,10 +296,17 @@ ISO.FinishSystem = class {
     return this.busy && !this.ballReleased && this.t >= this.tl.release - ISO.OFFENSE.finishReleaseWindow;
   }
 
+  // Step 17: the ball is blockable in the hands from the lift into the
+  // takeoff until the release (gather on the floor = steals' business).
+  get inBlockWindow() {
+    if (ISO.OFFENSE.finishBlockLegacy) return this.inReleaseWindow;     // ?tuning=16.5
+    return this.busy && !this.ballReleased && this.t >= this.tl.takeoff - ISO.OFFENSE.finishBlockBeforeTakeoff;
+  }
+
   // A defender's hand got to the ball at the release: it comes loose now with
   // the motion it has (the contact itself is resolved by the ball physics).
   knockLoose(loco) {
-    if (!this.inReleaseWindow) return false;
+    if (!this.inBlockWindow) return false;
     const b = this.ball;
     this.releaseContest = this.contestProvider ? this.contestProvider(this.finishType) : 0;
     this.releaseVelocity.copy(b.velocity);

@@ -258,6 +258,205 @@ ISO.SelfTest = class {
     this.directions('offense after steal', { reset: () => this.place(0, 9.5, 2.6) });
   }
 
+  // Step 17: I defend team B's finisher / ball handler (driven through their
+  // virtual input, the CPU's path). Physical results only: a block needs the
+  // hand on the ball, a steal needs the reach on an exposed ball.
+  defenseChecks() {
+    const g = this.g, P = this.P, V3 = (x, z) => new THREE.Vector3(x, 0, z), RIM = { x: 0, z: ISO.CONFIG.hoop.centerZ };
+    const toAxes = (x, z) => ISO.ScreenInput.fromWorld(x, z, g.cameraController.camera);
+    const ball = g.ball, I = g.input;
+    // my defender's movement goes through the keyboard path (the game reads it
+    // into the defender's intent every frame): scripted screen axes + sprint
+    const getAxes = I.getMoveAxes, getSprint = I.isSprinting;
+    let axes = { x: 0, y: 0 }, sprint = false;
+    I.getMoveAxes = () => axes; I.isSprinting = () => sprint;
+    const move = (a, sp) => { axes = a; sprint = sp; };
+    // one finish: B's handler drives from (sx, sz) and presses Space 2.4 m out;
+    // my defender starts at dpos, moves with defMove(d, h) and jumps at frame jf.
+    // Returns { rel (release frame), blocked, result }.
+    const finish = ({ sx, sz, sprint, dpos, defMove }, jf) => {
+      P.devReset('B'); this.live();
+      const h = g.handler, o = h.offense, L = o.locomotion, V = h.virtual, d = this.me.defense;
+      L.resetMotion(V3(sx, sz), Math.atan2(RIM.x - sx, RIM.z - sz)); o._updateBallHandling(0);
+      d.reset(V3(dpos[0], dpos[1])); Object.assign(d.humanInput, { x: 0, y: 0, sprint: false, jump: false, handsUp: false }); move({ x: 0, y: 0 }, false);
+      o.shooting.setSeed(7); this.step(2);
+      const b0 = d.blocks.blocksCount;
+      let st = 0, pf = 0, rel = -1, res = null;
+      for (let i = 0; i < 260; i++) {
+        if (st === 0) { V.sprint = sprint; V.axes = toAxes(RIM.x - L.position.x, RIM.z - L.position.z); if (Math.hypot(L.position.x - RIM.x, L.position.z - RIM.z) < 2.4) { V.press('shoot'); st = 1; pf = i; } }
+        else if (st === 1 && i >= pf + 2) { V.release('shoot'); V.axes = { x: 0, y: 0 }; V.sprint = false; st = 2; }
+        if (defMove) defMove(d, h);
+        if (i === jf) d.humanInput.jump = true;
+        this.step();
+        if (rel < 0 && ball.mode === 'free' && ball.flightKind === 'shot') rel = i;
+        if (g.scoring.resolvedThisFrame) { res = g.scoring.resolvedThisFrame; break; }
+      }
+      V.axes = { x: 0, y: 0 }; V.sprint = false; move({ x: 0, y: 0 }, false);
+      return { rel, blocked: d.blocks.blocksCount > b0, res };
+    };
+    // blocks over a few jump moments (frames relative to the no-jump release)
+    const sweep = (c, offs) => { const base = finish(c, null); let n = 0; const kinds = {}; for (const off of offs) { const r = finish(c, base.rel + off); if (r.blocked) n++; if (r.res) kinds[r.res.result] = (kinds[r.res.result] || 0) + 1; } return { n, of: offs.length, base, kinds }; };
+    const chaseSide = (d, h) => { const L = h.offense.locomotion, vl = Math.hypot(L.velocity.x, L.velocity.z) || 1; let nx = -L.velocity.z / vl, nz = L.velocity.x / vl;
+      if ((d.position.x - L.position.x) * nx + (d.position.z - L.position.z) * nz < 0) { nx = -nx; nz = -nz; }
+      const dx = ball.position.x + nx * 0.45 - d.position.x, dz = ball.position.z + nz * 0.45 - d.position.z;
+      move(toAxes(dx, dz), Math.hypot(dx, dz) > 0.5); };
+    const help = (d, h) => { const L = h.offense.locomotion, tx = (L.position.x + RIM.x) / 2, tz = (L.position.z + RIM.z) / 2, dx = tx - d.position.x, dz = tz - d.position.z;
+      move(Math.hypot(dx, dz) < 0.35 ? { x: 0, y: 0 } : toAxes(dx, dz), false); };
+    const good = [-34, -30, -26, -22];
+    const layupFront = { sx: 0.3, sz: 6.6, sprint: false, dpos: [0.15, 2.7] };
+    let r = sweep(layupFront, good);
+    this.check('block: front layup, timed jump', r.n >= 3, `${r.n}/${r.of} blocked (${JSON.stringify(r.kinds)})`);
+    const early = sweep(layupFront, [-56, -52]);
+    this.check('block: a defender who jumped early is beaten (falling away)', early.n === 0, `${early.n}/${early.of} blocked`);
+    r = sweep({ sx: -2.6, sz: 5.6, sprint: false, dpos: [0.9, 2.4], defMove: help }, good);
+    this.check('block: side layup (help rotating over)', r.n >= 2, `${r.n}/${r.of} blocked`);
+    r = sweep({ sx: 0.3, sz: 7.4, sprint: false, dpos: [0.93, 8.0], defMove: chaseSide }, [-26, -22, -18, -14]);
+    this.check('block: chase-down layup (trailing, ball side)', r.n >= 1, `${r.n}/${r.of} blocked`);
+    const thru = sweep({ sx: 0.3, sz: 7.4, sprint: false, dpos: [-0.33, 8.0], defMove: chaseSide }, [-30, -26, -22, -18, -14, -10]);
+    this.check('block: never through the finisher\'s body (off-side chase)', thru.n === 0, `${thru.n}/${thru.of} blocked`);
+    const dunkFront = { sx: 0.3, sz: 9.8, sprint: true, dpos: [0.1, 2.6] };
+    r = sweep(dunkFront, [-40, -36, -32, -28]);
+    this.check('block: front dunk, timed jump (before it is secured)', r.base.res && r.base.res.shotType === 'dunk' && r.n >= 2, `${r.n}/${r.of} blocked, base ${r.base.res ? r.base.res.shotType : '-'}`);
+    r = sweep({ sx: 0.3, sz: 9.8, sprint: true, dpos: [1.0, 9.6], defMove: chaseSide }, [-34, -30, -26, -22, -18]);
+    this.check('block: chase-down dunk (level, ball side)', r.n >= 1, `${r.n}/${r.of} blocked`);
+    // late: a dunk already secured at the rim can't be knocked loose; a descending ball at the rim is the rim's
+    const late = sweep(dunkFront, [0, 4, 8]);
+    this.check('block: no late swat on a secured dunk', late.n === 0, `${late.n}/${late.of} blocked`);
+    // ---- steals: an exposed ball-side read wins more often than a protected dribble
+    const reachRun = (setup, act, presses) => {
+      let won = 0, contact = 0;
+      const evs = []; const on = (e) => evs.push(e.type || e.result || 'x');
+      for (const pressAt of presses) {
+        P.devReset('B'); this.live();
+        const h = g.handler, V = h.virtual, d = this.me.defense;
+        h.offense.locomotion.resetMotion(V3(0, 9.5), Math.PI); h.offense._updateBallHandling(0);
+        setup(d); this.step(2);
+        const st0 = (g.scoring.stats(this.me.id).steals || 0), team0 = P.offenseTeamId;
+        for (let f = 0; f < 60; f++) { act(f, h, V, d); if (f === pressAt) { this.keyDown('KeyE'); } if (f === pressAt + 1) this.keyUp('KeyE'); this.step(); if (P.state !== 'LIVE') break; }
+        V.axes = { x: 0, y: 0 };
+        if ((g.scoring.stats(this.me.id).steals || 0) > st0) won++;
+        if (d.lastReachResult && d.lastReachResult !== 'miss' && d.lastReachResult !== '-') contact++;
+        this.until(() => P.state === 'LIVE' || P.state === 'POSSESSION_START', 120);
+      }
+      return { won, contact, n: presses.length };
+    };
+    const slide = (f, h, V, d) => { const a = toAxes(1, 0); V.axes = a; move(a, false); };
+    const exposed = reachRun((d) => d.reset(V3(0.2, 8.7)), slide, [6, 7, 8, 9]);
+    const protectedD = reachRun((d) => d.reset(V3(-0.35, 8.65)), () => {}, [6, 9, 12, 15, 18, 21, 24, 27]);
+    this.check('steal: exposed ball-side read can be stolen', exposed.won >= 1 && exposed.contact >= 3, `${exposed.won}/${exposed.n} stolen, ${exposed.contact} contacts`);
+    this.check('steal: protected dribble stays protected', protectedD.won === 0, `${protectedD.won}/${protectedD.n} stolen (${protectedD.contact} contacts)`);
+    // a reach that comes up empty leaves the defender off balance (vulnerable)
+    P.devReset('B'); this.live();
+    { const h = g.handler, d = this.me.defense; h.offense.locomotion.resetMotion(V3(0, 9.5), Math.PI); h.offense._updateBallHandling(0); d.reset(V3(0.2, 7.9)); this.step(3);
+      this.keyDown('KeyE'); this.step(1); this.keyUp('KeyE'); this.step(16);
+      this.check('steal: a missed reach costs balance', d.lastReachResult === 'miss' && d.balance.balance < 0.75 && d.balance.commitment > 0.3, `${d.lastReachResult}, balance ${d.balance.balance.toFixed(2)}, commit ${d.balance.commitment.toFixed(2)}`); }
+    Object.assign(this.me.defense.humanInput, { x: 0, y: 0, sprint: false, jump: false, handsUp: false });
+    I.getMoveAxes = getAxes; I.isSprinting = getSprint;
+    this.releaseAll();
+  }
+
+  // Hold the shot clock (legacy checks that spend > 12 s in one possession).
+  clockHold(on) {
+    const C = ISO.GAMEFLOW.shotClock;
+    if (on) { this._clockDur = C.duration; C.duration = 1e6; this.P.shotClock.remaining = 1e6; }
+    else if (this._clockDur) { C.duration = this._clockDur; this._clockDur = null; }
+  }
+
+  // Step 17: the shot clock — authoritative possession state, release-time rule.
+  shotClockChecks() {
+    const g = this.g, P = this.P, C = ISO.GAMEFLOW.shotClock, SC = () => P.shotClock, dt = 1 / 60, rules = ISO.GAMEFLOW.rules;
+    const viol = []; g.events.on('shotClockViolation', (e) => viol.push(e));
+    const near = (a, b, e = 1e-6) => Math.abs(a - b) < e;
+    const bench = () => { const d = g.defenderEntity; if (d) d.defense.reset(new THREE.Vector3(6.5, 0, 12.5)); };
+    // fresh, frozen before live, counts while live
+    P.devReset('A');
+    const r0 = SC().remaining, run0 = SC().running;
+    this.step(5);
+    this.check('shot clock: fresh possession = 12.0, frozen before live', C.duration === 12 && r0 === 12 && !run0 && SC().remaining === 12 && P.state === 'POSSESSION_START', `${r0} ${P.state}`);
+    this.live();
+    const a = SC().remaining; this.step(60);
+    this.check('shot clock: counts down while live (60 frames = 1.00 s)', SC().running && near(a - SC().remaining, 1, 1e-6), `${a.toFixed(3)} -> ${SC().remaining.toFixed(3)}`);
+    this.check('shot clock HUD: whole seconds', g.ui.clockValue.textContent === String(Math.ceil(SC().remaining - 1e-6)), g.ui.clockValue.textContent);
+    // pump fake / dribble move / step-back do not reset it
+    this.placeHandler(0, 7.5, 5.5); bench();
+    const sh = g.handler.offense.shooting, f0 = sh.pumpFakeCount, c0 = SC().remaining;
+    this.keyDown('Space'); this.step(3); this.keyUp('Space'); this.step(40);
+    this.check('shot clock: pump fake does not reset', sh.pumpFakeCount > f0 && SC().remaining < c0 - 0.6 && SC().running, `${c0.toFixed(2)} -> ${SC().remaining.toFixed(2)}`);
+    const c1 = SC().remaining;
+    this.keyDown('KeyD'); this.step(12); this.keyDown('KeyE'); this.step(2); this.keyUp('KeyE'); this.step(20); this.keyUp('KeyD'); this.keyDown('KeyQ'); this.step(2); this.keyUp('KeyQ'); this.step(30);
+    this.check('shot clock: dribble moves / step-back do not reset', near(c1 - SC().remaining, 66 * dt, 1e-6), `${c1.toFixed(2)} -> ${SC().remaining.toFixed(2)}`);
+    // HUD tenths in the last 5 s
+    SC().remaining = 4.96; this.step(1);
+    this.check('shot clock HUD: tenths under 5 s', g.ui.clockValue.textContent === '4.9' && g.ui.clockEl.classList.contains('is-low'), g.ui.clockValue.textContent);
+    // a jumper with the clock set to `rem` right before the press; returns what happened
+    const jumper = (rem, seed = 7919) => {
+      P.devReset('A'); this.live(); this.placeHandler(0, 6.6, 5.5); bench();
+      const h = g.handler, s2 = h.offense.shooting; s2.setSeed(seed);
+      if (rem !== null) SC().remaining = rem;
+      const v0 = viol.length, att0 = g.scoring.attempts, sc0 = Object.assign({}, g.scoring.teamScore), shot0 = P.lastShotId;
+      this.keyDown('Space');
+      let n = 0, rel = -1, inFlight = null, frozen = true;
+      for (let i = 0; i < 420 && P.state !== 'POSSESSION_START'; i++) {
+        this.step(); n++;
+        if (s2.isShooting && s2.shotTime >= s2.settings.idealRelease) this.keyUp('Space');
+        if (rel < 0 && g.ball.mode === 'free') { rel = n; inFlight = SC().remaining; }
+        else if (rel > 0 && P.state === 'SHOT_IN_FLIGHT' && SC().remaining !== inFlight) frozen = false;
+      }
+      this.keyUp('Space');
+      const res = P.lastShotId !== shot0 ? g.scoring.lastResult : null;
+      return { rel, violation: viol.length > v0, attempted: g.scoring.attempts > att0, res, scoreSame: g.scoring.teamScore.A === sc0.A && g.scoring.teamScore.B === sc0.B,
+        next: P.offenseTeamId, reason: P.possessionStartReason, clock: SC().remaining, running: SC().running, frozen, atRelease: P.lastReleaseClock };
+    };
+    const base = jumper(1e6);
+    const n = base.rel;
+    this.check('shot clock: stops at the release (frozen while the shot flies)', base.frozen && base.attempted && !base.violation, `release step ${n}`);
+    this.check('shot clock: make -> fresh 12 (same team)', base.res && base.res.made && base.next === 'A' && base.reason === 'MAKE' && base.clock === 12 && !base.running, `${base.res && base.res.result} ${base.next} ${base.clock}`);
+    const before = jumper(n * dt + 0.004);
+    this.check('buzzer: release just before zero is a valid shot', !before.violation && before.attempted && before.res && before.atRelease > 0, `left ${before.atRelease} s at release; ${before.res && before.res.result}`);
+    const exact = jumper(n * dt);
+    this.check('buzzer: zero exactly at the release step = violation', exact.violation && !exact.attempted && exact.scoreSame, `violation ${exact.violation}, attempt ${exact.attempted}`);
+    const after = jumper((n - 1) * dt);
+    this.check('buzzer: zero before the release = violation, no score', after.violation && !after.attempted && after.scoreSame, `violation ${after.violation}, score unchanged ${after.scoreSame}`);
+    this.check('violation: other team\'s ball (SHOT_CLOCK), fresh 12', after.next === 'B' && after.reason === 'SHOT_CLOCK' && after.clock === 12, `${after.next} ${after.reason} ${after.clock}`);
+    // a full possession of nothing expires at 12.0 s of simulation time, at any frame rate
+    const expiry = (h) => { P.devReset('A'); this.live(); bench(); let t = 0; const v0 = viol.length; for (let i = 0; i < 4000 && viol.length === v0; i++) { g.step(h); t += h; } return t; };
+    const t30 = expiry(1 / 30), t144 = expiry(1 / 144);
+    this.until(() => P.state === 'POSSESSION_START', 300);
+    this.check('shot clock: expires at 12.0 s at 30 and 144 fps', t30 >= 12 - 1e-9 && t30 < 12 + 1 / 30 + 1e-9 && t144 >= 12 - 1e-9 && t144 < 12 + 1 / 144 + 1e-9, `30 fps ${t30.toFixed(4)} s, 144 fps ${t144.toFixed(4)} s`);
+    // miss -> fresh 12
+    let m = this.shoot((r) => !r.made, { offset: 0.13 });
+    this.until(() => P.state === 'POSSESSION_START', 600);
+    this.check('shot clock: miss -> other team, fresh 12', m.r && P.offenseTeamId !== m.team && SC().remaining === 12 && !SC().running, `${P.offenseTeamId} ${SC().remaining}`);
+    // blocked miss -> fresh 12
+    P.devReset('A'); this.live();
+    m = this.shoot((r) => r.result === 'BLOCKED_MISS', { jumpAt: 12 });
+    this.until(() => P.state === 'POSSESSION_START', 600);
+    this.check('shot clock: blocked miss -> defense, fresh 12', m.r && P.offenseTeamId !== m.team && SC().remaining === 12, `${m.r ? m.r.result : 'no block'} ${P.offenseTeamId} ${SC().remaining}`);
+    // clean steal -> fresh 12 for the new offense
+    P.devReset('B'); this.live(); this.step(60);
+    g.steals._award(this.me, g.handler.offense, 'clean', ISO.DEFENSE.steal.stealResetDelay, { defenderPlayerId: this.me.id });
+    this.until(() => P.state === 'POSSESSION_START', 300);
+    this.check('shot clock: steal -> new offense, fresh 12', P.offenseTeamId === this.me.teamId && P.possessionStartReason === 'STEAL' && SC().remaining === 12, `${P.offenseTeamId} ${SC().remaining}`);
+    // a deflection the offense keeps (check-ball reset) does NOT reset it
+    this.live(); this.step(90);
+    const kept = SC().remaining;
+    P.endPossession(P.offenseTeamId, 'DEFLECTION', 0.2);
+    this.until(() => P.state === 'POSSESSION_START', 300);
+    this.check('shot clock: retained deflection keeps the time', near(SC().remaining, kept, 1e-9) && kept < 11, `${kept.toFixed(2)} -> ${SC().remaining.toFixed(2)}`);
+    // the winning basket stops the clock; the next game starts fresh
+    const target = rules.targetScore; rules.targetScore = 11;
+    P.devReset('A'); this.live();
+    g.scoring.teamScore.A = 10; g.scoring.teamScore.B = 3;
+    m = this.shoot((r) => r.made);
+    const stopped = !SC().running, left = SC().remaining;
+    this.step(30);
+    const still = SC().remaining === left;
+    this.until(() => P.state === 'POSSESSION_START', 900);
+    this.check('winning basket stops the clock; new game fresh 12', m.r && stopped && still && g.scoring.teamScore.A === 0 && SC().remaining === 12, `left ${left.toFixed(2)}, new game ${SC().remaining}`);
+    rules.targetScore = target;
+    this.live();
+  }
+
   // Step 16: the rig contract, colliders on the visible hands, the shot timeline.
   modelChecks() {
     const g = this.g, P = this.P;
@@ -272,10 +471,33 @@ ISO.SelfTest = class {
     for (const h of d.blocks.hands) off = Math.max(off, d.model.getHandWorld(h.side, v).distanceTo(h.cur));
     this.keyUp('KeyF');
     this.check('hand colliders follow the visible hand bones', off <= ISO.DEFENSE.hands.fingerOffset + 0.005, `${(off * 100).toFixed(1)} cm`);
-    // jump shot: ball out at the jump's peak, ~600 ms after the press; tap = pump fake
+    // jump shot (Step 17): a dead-center green release leaves the hand 545-565 ms
+    // after the press, just before the top of the jump; tap = pump fake
     const s = this.me.offense.shooting.settings, out = s.idealRelease + s.extendTime, peak = s.takeoff + s.airTime / 2;
-    this.check('jump shot: release ~0.6 s, at the top of the jump', out > 0.53 && out < 0.62 && Math.abs(out - peak) < 0.03, `ball out ${(out * 1000).toFixed(0)} ms, peak ${(peak * 1000).toFixed(0)} ms`);
+    this.check('jump shot: release 545-565 ms, at the top of the jump', out >= 0.545 && out <= 0.565 && Math.abs(out - peak) < 0.03 && s.greenHalfWindow === 0.02, `ball out ${(out * 1000).toFixed(0)} ms, peak ${(peak * 1000).toFixed(0)} ms, green ±${s.greenHalfWindow * 1000} ms`);
     this.check('jump shot: a tap is still a pump fake', s.fakeThreshold < s.gatherTime && s.fakeThreshold >= 0.12, `fake < ${s.fakeThreshold * 1000} ms`);
+    // in game: release exactly at the ideal moment -> PERFECT, the ball leaves at the
+    // timeline's moment (one 60 fps frame at most later) and the meter's green band
+    // holds the fill at the release; a 117 ms tap is a pump fake
+    P.devReset('A'); this.live(); this.placeHandler(0, 7.5, 5.5);
+    { const dd = this.g.defenderEntity; if (dd) dd.defense.reset(new THREE.Vector3(6.5, 0, 12.5)); }
+    const sh = this.me.offense.shooting, I = this.g.input;
+    this.keyDown('Space');
+    let t = 0, up = false, outT = null, fillAt = null;
+    for (let i = 0; i < 90 && outT === null; i++) {
+      if (!up && sh.isShooting && sh.shotTime + 1 / 60 >= s.idealRelease) { const age = sh.shotTime + 1 / 60 - s.idealRelease; I.keys.delete('Space'); I.upTime.Space = performance.now() - age * 1000; up = true; }
+      this.step(); t += 1 / 60;
+      if (fillAt === null && sh.releaseTiming) fillAt = sh.shotMeter;
+      if (this.g.ball.mode === 'free') outT = t;
+    }
+    const z = sh.timingZones;
+    this.check('jump shot: dead-center release = PERFECT, ball out on time', sh.releaseTiming === 'PERFECT' && outT !== null && outT >= out - 1e-6 && outT < out + 1 / 60 + 1e-6, `${sh.releaseTiming}, ball out ${outT !== null ? (outT * 1000).toFixed(0) : '-'} ms`);
+    this.check('shot meter synced: release lands in the green band', fillAt !== null && fillAt >= z.greenStart - 1e-6 && fillAt <= z.greenEnd + 1e-6 && Math.abs(z.ideal - s.idealRelease / s.autoRelease) < 1e-6, `fill ${fillAt !== null ? fillAt.toFixed(3) : '-'} in [${z.greenStart.toFixed(3)}, ${z.greenEnd.toFixed(3)}]`);
+    this.until(() => this.P.state === 'POSSESSION_START', 400); this.live(); this.placeHandler(0, 7.5, 5.5);
+    { const dd = this.g.defenderEntity; if (dd) dd.defense.reset(new THREE.Vector3(6.5, 0, 12.5)); }
+    const nf = sh.pumpFakeCount, ns = sh.shotCount;
+    this.keyDown('Space'); this.step(7); this.keyUp('Space'); this.step(40);
+    this.check('pump fake: a 117 ms tap fakes, never shoots', sh.pumpFakeCount === nf + 1 && sh.shotCount === ns, `fakes +${sh.pumpFakeCount - nf}, shots +${sh.shotCount - ns}`);
   }
 
   // Step 16.5: no teleports/dead frames/camera jerks, frame-rate independent smoothing.
@@ -326,6 +548,9 @@ ISO.SelfTest = class {
     ISO.DEFENSE.steal.cpuChance = 0;   // a CPU poke mid-measurement would reset the possession under the test
     rules.targetScore = 999;           // shots pile up while retrying; the 11 test sets scores itself
     const other = (t) => g.roster.otherTeam(t);
+    // The 12 s shot clock would end the long measurement possessions below
+    // mid-test: it is held for them and checked on its own (shotClockChecks).
+    this.clockHold(true);
 
     // ---- 1. directions on offense, then across repeated possession changes ----
     P.devReset('A'); this.live(); this.roles('start');
@@ -419,6 +644,13 @@ ISO.SelfTest = class {
 
     // ---- 7. motion continuity (Step 16.5) -----------------------------------------
     this.continuityChecks();
+
+    // ---- 8. defense: finishes are blockable, steals reward reads (Step 17) -------
+    this.defenseChecks();
+
+    // ---- 9. the shot clock (Step 17) ---------------------------------------------
+    this.clockHold(false);
+    this.shotClockChecks();
 
     rules.targetScore = target;
     ISO.DEFENSE.steal.cpuChance = cpuChance;

@@ -16,6 +16,7 @@ ISO.CameraController = class {
     this.basket = new THREE.Vector3(0, 0, H.centerZ);
     this.camera = new THREE.PerspectiveCamera(this.cfg.fov, aspect, 0.1, 200);
     this.focus = new THREE.Vector3(0, 0, 6.5);  // where we want to look (unsmoothed)
+    this.framed = this.focus.clone();           // ...after the size-up dead zone (what the camera follows)
     this.current = this.focus.clone();          // smoothed focus
     this.vel = new THREE.Vector3();             // its velocity (critically damped follow)
     this.biasV = 0;
@@ -45,10 +46,17 @@ ISO.CameraController = class {
   // Set the point of interest. Smoothed in update().
   setFocus(v) {
     this.focus.copy(v);
+    // Size-up dead zone (Step 17): small shuffles inside deadZone don't move
+    // the camera; beyond it the framed point is dragged along (continuous —
+    // the critically damped follow below smooths the start of the drag).
+    const dz = this.cfg.deadZone || 0, dx = v.x - this.framed.x, dzz = v.z - this.framed.z, d = Math.hypot(dx, dzz);
+    if (d > dz) { const k = 1 - dz / d; this.framed.x += dx * k; this.framed.z += dzz * k; }
+    this.framed.y = v.y;
   }
 
   // Jump straight to the target with no easing (possession resets).
   snap() {
+    this.framed.copy(this.focus);
     this.yaw = this.yawTarget = this._wantYaw();
     this.current.copy(this._biasedFocus());
     this.vel.set(0, 0, 0);
@@ -95,7 +103,7 @@ ISO.CameraController = class {
   }
 
   _biasedFocus() {
-    return this._tmp.copy(this.focus).lerp(this.basket, this.bias);
+    return this._tmp.copy(this.framed).lerp(this.basket, this.bias);
   }
 
   _apply() {

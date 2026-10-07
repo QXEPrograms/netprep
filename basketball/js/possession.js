@@ -17,8 +17,14 @@
 // The rule: a MAKE (or BLOCKED_MAKE) keeps the ball with the shooting team
 // (make-it-take-it); a MISS gives it to the other team; a BLOCKED_MISS gives
 // it to the defending team. Reasons are kept general (MISS, BLOCK, STEAL,
-// OUT_OF_BOUNDS, VIOLATION) so later systems can end possessions the same way
-// through endPossession(); only MAKE / MISS / BLOCK happen today.
+// SHOT_CLOCK, OUT_OF_BOUNDS, VIOLATION) so every system ends possessions the
+// same way through endPossession().
+//
+// Shot clock (Step 17, shot-clock.js): every NEW possession gets a fresh
+// clock; it only runs while LIVE and stops the moment a shot leaves the hand.
+// Zero before a release = SHOT_CLOCK violation: no score, the other team's
+// ball. The offense keeping a deflected ball (DEFLECTION / DEAD_BALL resets)
+// continues with the time it had.
 //
 // Team possession (offenseTeamId) is not ball ownership (ball.ownerPlayerId):
 // during a shot the team has possession while nobody owns the ball.
@@ -37,6 +43,7 @@ ISO.POSSESSION_REASON = {
   MISS: 'MISS',
   BLOCK: 'BLOCK',
   STEAL: 'STEAL',               // a clean steal or a deflection the defense came up with
+  SHOT_CLOCK: 'SHOT_CLOCK',     // the shot clock reached zero before a release
   OUT_OF_BOUNDS: 'OUT_OF_BOUNDS', // (future)
   VIOLATION: 'VIOLATION',       // (future)
   DEFLECTION: 'DEFLECTION',     // a poked ball got away, but the offense was nearer: their ball again
@@ -79,6 +86,11 @@ ISO.PossessionSystem = class {
     this.manual = false;
     this.onReset = null;          // game hook after every reset (input routing, camera, bots)
     this._deadT = 0;
+    // The possession's shot clock (authoritative; the UI only shows it).
+    this.shotClock = new ISO.ShotClock(this.cfg.shotClock.duration);
+    // A release only counts while the clock hasn't run out first (scoring.js
+    // asks): a ball let go after the buzzer flies, but scores nothing.
+    scoring.acceptRelease = () => !this.shotClock.expired;
 
     events.on('shotReleased', (e) => this._onShotReleased(e));
     events.on('shotResolved', (e) => this._onShotResolved(e));
@@ -101,6 +113,23 @@ ISO.PossessionSystem = class {
     if (this.state === S.TRANSITION || this.state === S.RESETTING) return;
     this.next = { teamId, reason };
     this._enter(S.SHOT_RESOLVING, delay);
+  }
+
+  // Start of every simulation step (before anyone moves): the clock runs while
+  // play is live. Reaching zero here means zero came before anything released
+  // during this step (see shot-clock.js for the exact rule).
+  tickClock(dt) {
+    if (this.manual || this.state !== S.LIVE || this.cfg.shotClock.enabled === false) return;
+    if (this.shotClock.tick(dt)) this._shotClockViolation();
+  }
+
+  _shotClockViolation() {
+    const off = this.offenseTeamId;
+    let to = this.roster.otherTeam(off);
+    if (!to || !this.roster.playersOn(to).length) to = off;     // practice: nobody else
+    this.lastViolationPossession = this.possessionNumber;
+    if (this.events) this.events.emit('shotClockViolation', { offenseTeamId: off, newTeamId: to, possessionNumber: this.possessionNumber });
+    this.endPossession(to, R.SHOT_CLOCK, this.cfg.shotClock.violationResetDelay);
   }
 
   update(dt) {
@@ -140,6 +169,8 @@ ISO.PossessionSystem = class {
     this.lastShotId = e.shotId;
     this.lastShooterPlayerId = e.shooterPlayerId;
     this.lastShotTeamId = e.shootingTeamId;
+    this.shotClock.stop();                     // the ball is out before zero: the clock is done
+    this.lastReleaseClock = +this.shotClock.remaining.toFixed(4);
     if (this.state === S.LIVE || this.state === S.SHOT_IN_FLIGHT) this._enter(S.SHOT_IN_FLIGHT);
   }
 
@@ -193,6 +224,7 @@ ISO.PossessionSystem = class {
     this.state = state;
     this.stateTime = 0;
     this.timer = timer;
+    if (state === S.LIVE) this.shotClock.start(); else this.shotClock.stop();
     if (state === S.LIVE) {
       for (const p of this.roster.players) p.input.flush();
       if (this.events) this.events.emit('possessionLive', { possessionNumber: this.possessionNumber, offenseTeamId: this.offenseTeamId });
@@ -222,6 +254,11 @@ ISO.PossessionSystem = class {
     this.offenseTeamId = off;
     this.defenseTeamId = def;
     this.possessionNumber++;
+    // Shot clock: fresh for every new possession; the same team keeping a
+    // deflected / dead ball continues with the time it had.
+    const carry = !changed && prevTeam !== null && (next.reason === R.DEFLECTION || next.reason === R.DEAD_BALL) && !this.shotClock.expired;
+    if (carry) this.shotClock.carryTo(this.possessionNumber);
+    else this.shotClock.resetFor(this.possessionNumber, this.cfg.shotClock.duration);
     this.currentShot = null;
     this._deadT = 0;
     this.scoring.cancelPending();
@@ -298,6 +335,7 @@ ISO.PossessionSystem = class {
       lastShotTeamId: this.lastShotTeamId, lastScoringPlayerId: this.lastScoringPlayerId,
       lastBlockPlayerId: this.lastBlockPlayerId, lastBlockTeamId: this.lastBlockTeamId,
       timer: +Math.max(0, this.timer).toFixed(2), fade: +this.fade.toFixed(2),
+      shotClock: this.shotClock.snapshot(),
       shot: cs ? Object.assign({}, cs, this.scoring.pending ? { wasBlocked: this.scoring.pending.wasBlocked, blockerPlayerId: this.scoring.pending.blockerPlayerId } : {}) : null,
     };
   }

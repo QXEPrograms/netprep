@@ -86,6 +86,7 @@ ISO.Basketball = class {
     this.mode = ISO.Basketball.MODES.FREE;
     this.flightKind = kind;
     this.shotKind = null;      // set by the shooter on a shot release ('jumpshot', 'layup', 'floater', 'dunk')
+    this.deadShot = false;     // a release the scoring ignored (after the shot clock ran out)
     this.blockedAt = null;
     this.blockedBy = null;
     this.position.copy(pos);

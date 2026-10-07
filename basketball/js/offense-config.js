@@ -28,7 +28,18 @@ ISO.OFFENSE = {
   inputBuffer: 0.15,
   // Finishes: how long before the release a defender's hand can reach the ball
   // (the "release portion" of a layup, dunk or floater).
-  finishReleaseWindow: 0.12,   // a move pressed just before its window opens still fires (seconds)
+  finishReleaseWindow: 0.12,   // seconds (Step 16.5: the ONLY blockable part of a finish still in the hands)
+  // Step 17: a finish is a shot from the moment the ball comes up into it —
+  // from this long before takeoff until it leaves the hand, a defender's live
+  // hand (jumping / hands up) that physically meets the ball blocks it. Before
+  // that, the gather on the floor belongs to steals; a dunk already secured at
+  // the rim (DEFENSE.block.dunkLockRadius) can't be knocked loose.
+  finishBlockBeforeTakeoff: 0.06,
+  finishBlockMinHeight: 1.8,   // ...once the ball is up in the finish (above the head) and only by a
+                               // defender who is off the floor: a ball carried at the chest into
+                               // raised hands is not a block
+  finishBlockBelow: 0.05,
+  finishBlockFallSpeed: 1.2,   // ...by a defender still rising or near his apex (falling slower than this, m/s)      // ...with the hand at / above the ball (m below the ball centre at most)
 
   // ---- light fatigue ------------------------------------------------------
   fatigue: {
@@ -97,6 +108,26 @@ ISO.OFFENSE = {
   // (and so the meter and green window) lives in ShootingSystem settings and is
   // unchanged; these are the parts that decide how long control is taken away.
   jumpShot: {
+    // The timeline (seconds from the press). Step 16: the release got ~12%
+    // quicker (press -> ball out 683 -> ~600 ms). Step 17: quicker again — a
+    // dead-center green release leaves the hand at idealRelease + extendTime
+    // = 548 ms after the press (Step 16.5: 568; on 60 fps frames 550 vs 583
+    // ms). Both times the time came out of the gather, the dip before the jump
+    // and the ball's raise; the jump, the arm extension, the green window and
+    // the follow-through are unchanged, and the ball still leaves ~12 ms
+    // before the top of the jump. The meter is built from these numbers.
+    timeline: {
+      fakeThreshold: 0.14,    // release Space before this = pump fake
+      gatherTime: 0.152,      // Step 16.5: 0.16 (Step 16 was 0.2)
+      takeoff: 0.28,          // Step 16.5: 0.3 (the dip/load before the jump is 12 ms shorter)
+      airTime: 0.56,          // jump length (≈ 0.38 m high)
+      raiseStart: 0.18,       // ball starts rising from the pocket (Step 16.5: 0.19)
+      setReached: 0.41,       // ball up at the set point; earliest the arm can extend (Step 16.5: 0.43)
+      extendTime: 0.07,       // arm extension before the ball leaves the hand
+      autoRelease: 0.70,      // holding longer releases automatically (Step 16.5: 0.72; same late range)
+      idealRelease: 0.478,    // perfect moment to let go (Step 16.5: 0.498)
+      greenHalfWindow: 0.02,  // ±20 ms = GREEN (unchanged)
+    },
     landRecover: 0.2,      // after landing, before you can move freely again
     // pump fake: a quick tap = ball up to the chin and back into the dribble
     fakeRise: 0.14,

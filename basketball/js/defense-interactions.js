@@ -129,7 +129,7 @@ ISO.StealSystem = class {
     const b = this.ball;
     if (b.mode !== MODES().CONTROLLED || b.holder !== handler) return false;
     const sh = handler.shooting, fi = handler.finishing;
-    if (sh.inReleaseWindow || fi.inReleaseWindow || handler.airborne || (fi.busy && fi._tookOff)) return false;
+    if (sh.inReleaseWindow || fi.inBlockWindow || handler.airborne || (fi.busy && fi._tookOff)) return false;
     return true;
   }
 
