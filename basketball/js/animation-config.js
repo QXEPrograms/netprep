@@ -10,6 +10,7 @@ ISO.ANIM = {
     retreatFlex: 0.12,     // retreating: sit lower...
     retreatChest: 0.1,     // ...chest stays forward over the ball
     retreatStep: 0.35,     // ...and the backpedal steps are shorter (fraction removed)
+    omega: 7,              // how gently the set base eases in/out (1/s)
   },
   // ---- alive while standing ---------------------------------------------------------
   idle: {
@@ -17,18 +18,18 @@ ISO.ANIM = {
     breatheHz: 0.28,
     shift: 0.012,          // hip weight shift (m)
     shiftHz: 0.45,
-    dribbleShoulder: 0.07, // dribble-side clavicle dips with the ball's push
+    dribbleShoulder: 0.05, // dribble-side clavicle dips with the ball's push (eased)
   },
   // ---- the free (non-dribble) arm ---------------------------------------------------
   offArm: {
-    guardPitch: -0.7, guardOut: 0.34, guardElbow: -1.3,      // relaxed guard in front
-    barPitch: -1.0, barOut: 0.55, barElbow: -1.7,            // arm bar when the defender is right there
+    guardPitch: -0.62, guardOut: 0.34, guardElbow: -1.22,    // relaxed guard in front (Step 17: -0.55 / 0.32 / -1.15)
+    barPitch: -0.85, barOut: 0.5, barElbow: -1.5,            // arm bar when the defender is right there
   },
   // ---- braking / hard stop: the body catches the momentum ---------------------------
   brake: {
     decel: 16,             // m/s^2 of braking that reads as a full stop-plant
     flex: 0.14,            // knees load
-    omega: 18,
+    omega: 9,
   },
   // ---- drive load: the first push out of the stance --------------------------------
   driveLoad: {
@@ -40,8 +41,8 @@ ISO.ANIM = {
     toeOff: 0.42,          // heel up as a foot leaves the floor
     heelStrike: 0.22,      // toes up as it lands (forward steps)
     peel: 0.3,             // a planted rear foot peels its heel before stepping
-    toeLen: 0.19,          // ankle -> ball of the foot (keeps the toe on the floor)
-    heelLen: 0.085,
+    toeLen: 0.2, toeDrop: 0.06,      // ankle -> toe (forward, down): the toe stays on the floor
+    heelLen: 0.085, heelDrop: 0.0675, // ankle -> heel (back, down): the heel stays on the floor
   },
   // ---- contact: never lean through the matchup -------------------------------------
   contact: {
